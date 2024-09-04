@@ -1,0 +1,553 @@
+# Coryne genomes analysis
+# Preliminaries
+
+## Credits
+Author: Rachel Myers
+
+Investigator: Dr. Matthew Kelly
+
+Date: `r Sys.Date()`
+
+## Recreating this report
+
+1. Ensure that the R packages rmarkdown, knitr, and those listed below are installed
+
+2. Ensure that the file Coryne_WGA.rmd is in your working directory in R, change your R's working directory if needed 
+
+3. Copy and paste the below code chunk into R, updating the path for the file coryne_BGCs_071222.xlsx as appropraite for your system
+
+```{r recreate, echo = TRUE, eval = FALSE,  results = "asis"}
+rm(list= ls(all= TRUE))
+require("rmarkdown")
+require("knitr")
+fh <- "~/Downloads/coryne_BGCs_071222.xlsx" # full path to the data file 
+render("Coryne_WGA.rmd", c("html_document"))
+
+```
+
+
+
+## Load packages and functions
+
+Required r packages: 
+
+
+* readxl
+* tidverse
+* ggplot2
+* kableExtra
+* table1
+
+Set seed for reproducibility of random processes
+
+```{r loadpackages, echo = F, warnings = F, error = F, message = F}
+require(readxl)
+require(ggplot2)
+require(tidyverse)
+require(kableExtra)
+require(table1)
+set.seed(1234)
+```
+
+##  Load & Clean Datasets
+
+* Load excel file with metadata and gene cluster results
+
+Data cleaning
+
+* meta characteristics - none 
+* for each type of gene cluster, add a unique gene cluster identifier for each unique sequence
+
+
+```{r loaddata, echo = F, results = "asis", error = F, warning = F}
+
+# meta data sheet - one row per strain / sample id
+metadata <- read_excel(fh, sheet="Metadata", na="NA")
+metadata <- metadata[order(metadata$strain_id), ]
+metadata$unknown_strains <- NULL
+cat("<br>Metadata loaded")
+
+#PKS sheet, one row per strain x pks_seq combination
+sheetid = "PKS"
+pks <- read_excel(fh, sheet=sheetid , na="NA")
+cat("<br>",sheetid, " loaded")
+
+cat("<br>Number of",sheetid, "gene clusters per strain<br>")
+table(table(pks$strain_id)) %>%
+    kbl() %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+cat("Number of", sheetid, "clusters observed 1x, 2x, 3x, etc<br>")
+table(table(pks$pks_seq))  %>%
+    kbl(col.names = c("NoTimesObserved","NoClusters" ) )%>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+pks$pks_seq <- as.factor(pks$pks_seq)
+pks <- arrange(pks, by=pks_seq)
+# assign each PKS gene cluster a unique id
+pks <- pks %>% mutate(pks_unique=paste("pks",cumsum(!duplicated(pks_seq)), sep=""))
+pks$pks_unique[is.na(pks$pks_seq)] <- NA
+pks <- arrange(pks, by=strain_id)
+pks <- pks[,c("strain_id", "pks_unique", "pks_type", "pks_seq")]
+pks <- pks[order(pks$pks_type),]
+
+cat("Among the", sum(!is.na(pks$pks_seq)), "strain x", sheetid, "results, there are", 
+    length(na.omit(unique(pks$pks_unique))), "unique", sheetid, " gene clusters identified. There are",
+    sum(is.na(pks$pks_seq)), "strains with no", sheetid, " gene clusters identified.<br>")
+
+# restructure such that each row is a single strain and up to two series of pks annotation columns
+pks_final <- pks %>% distinct(strain_id, pks_unique, .keep_all = TRUE) %>%
+  group_by(strain_id) %>%
+  mutate(row = row_number()) %>%
+  tidyr::pivot_wider(names_from = row, values_from = c(pks_unique, pks_type, pks_seq))
+pks_final <- pks_final[,c("strain_id", "pks_unique_1", "pks_type_1", "pks_seq_1", 
+    "pks_unique_2", "pks_type_2", "pks_seq_2")]
+
+bgc_final <- merge(metadata, pks_final, by="strain_id", all.x=FALSE)
+
+# import NRPS sheet
+sheetid = "NRPS"
+nrps <- read_excel(fh, sheet=sheetid , na="NA")
+cat("<br>",sheetid, " loaded")
+
+cat("<br>Number of",sheetid, "gene clusters per strain<br>")
+table(table(nrps$strain_id)) %>%
+    kbl() %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+cat("Number of", sheetid, "clusters observed 1x, 2x, 3x, etc<br>")
+table(table(nrps$nrps_seq) )%>%
+    kbl(col.names = c("NoTimesObserved","NoClusters" ) )%>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+
+nrps$nrps_seq <- as.factor(nrps$nrps_seq)
+nrps <- arrange(nrps, by=nrps_seq)
+# add a unique id for each NRPS
+nrps <- nrps %>% mutate(nrps_unique=paste("nrps",cumsum(!duplicated(nrps_seq)), sep=""))
+nrps$nrps_unique[is.na(nrps$nrps_seq)] <- NA
+nrps <- arrange(nrps, by=strain_id)
+nrps <- nrps[,c("strain_id", "nrps_unique", "nrps_seq")]
+
+cat("Among the", sum(!is.na(nrps$nrps_seq)),  "strain x", sheetid, "results, there are", 
+    length(na.omit(unique(nrps$nrps_unique))), "unique ", sheetid, "gene clusters identified. There are",
+    sum(is.na(nrps$nrps_seq)), "strains with no", sheetid, "gene clusters identified.<br>")
+
+nrps_final <- nrps %>% distinct(strain_id, nrps_unique, .keep_all = TRUE) %>%
+  group_by(strain_id) %>%
+  mutate(row = row_number()) %>%
+  tidyr::pivot_wider(names_from = row, values_from = c(nrps_unique, nrps_seq))
+nrps_final <- nrps_final[,c("strain_id", "nrps_unique_1", "nrps_seq_1", "nrps_unique_2", "nrps_seq_2", 
+                            "nrps_unique_3", "nrps_seq_3", "nrps_unique_4", "nrps_seq_4")]
+bgc_final <- merge(bgc_final, nrps_final, by  = "strain_id") 
+
+# import NRPS-like sheet
+sheetid = "NRPS-like"
+nrps_like <- read_excel(fh, sheet=sheetid, na="NA")
+cat("<br>",sheetid, " loaded")
+
+cat("<br>Number of", sheetid, "gene clusters per strain<br>")
+table(table(nrps_like$strain_id)) %>%
+    kbl() %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+cat("Number of", sheetid, "clusters observed 1x, 2x, 3x, etc<br>")
+table(table(nrps_like$nrps_like_seq)) %>%
+    kbl(col.names = c("NoTimesObserved","NoClusters" ) )%>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+nrps_like$nrps_like_seq <- as.factor(nrps_like$nrps_like_seq)
+nrps_like <- arrange(nrps_like, by=nrps_like_seq)
+nrps_like <- nrps_like %>% mutate(nrps_like_unique=paste("nrps_like",cumsum(!duplicated(nrps_like_seq)), sep=""))
+nrps_like$nrps_like_unique[is.na(nrps_like$nrps_like_seq)] <- NA
+nrps_like <- arrange(nrps_like, by=strain_id)
+nrps_like_final <- nrps_like[,c("strain_id", "nrps_like_unique", "nrps_like_seq")]
+
+cat("Among the", sum(!is.na(nrps_like_final$nrps_like_seq)), "strain x", sheetid, "results, there are", 
+    length(na.omit(unique(nrps_like_final$nrps_like_unique))), "unique", sheetid, "gene clusters identified. There are",
+    sum(is.na(nrps_like_final$nrps_like_seq)), "strains with no", sheetid, "gene clusters identified.<br>")
+
+bgc_final <- merge(bgc_final, nrps_like_final , by  = "strain_id") 
+
+# import NAPAA sheet
+sheetid = "NAPAA"
+napaa <- read_excel(fh, sheet=sheetid , na="NA")
+cat("<br>",sheetid, " loaded")
+
+cat("<br>Number of", sheetid, "gene clusters per strain<br>")
+table(table(napaa$strain_id)) %>%
+    kbl() %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+cat("Number of", sheetid, "clusters observed 1x, 2x, 3x, etc<br>")
+table(table(napaa$napaa_seq)) %>%
+    kbl(col.names = c("NoTimesObserved","NoClusters" ) )%>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+napaa$napaa_seq <- as.factor(napaa$napaa_seq)
+napaa <- arrange(napaa, by=napaa_seq)
+napaa <- napaa %>% mutate(napaa_unique=paste("napaa",cumsum(!duplicated(napaa_seq)), sep=""))
+napaa$napaa_unique[is.na(napaa$napaa_seq)] <- NA
+napaa <- arrange(napaa, by=strain_id)
+napaa <- napaa[,c("strain_id", "napaa_unique", "napaa_seq")]
+
+cat("Among the", sum(!is.na(napaa$napaa_seq)), "strain x", sheetid, "results, there are", 
+    length(na.omit(unique(napaa$napaa_unique))), "unique", sheetid, "gene clusters identified. There are",
+    sum(is.na(napaa$napaa_seq)), "strains with no NAPAA", sheetid, "clusters identified.<br>")
+
+napaa_final <- napaa %>% distinct(strain_id, napaa_unique, .keep_all = TRUE) %>%
+  group_by(strain_id) %>%
+  mutate(row = row_number()) %>%
+  tidyr::pivot_wider(names_from = row, values_from = c(napaa_unique, napaa_seq))
+napaa_final <- napaa_final[,c("strain_id", "napaa_unique_1", "napaa_seq_1", "napaa_unique_2", "napaa_seq_2")]
+
+bgc_final <- merge(bgc_final, napaa_final , by  = "strain_id") 
+
+# import Terpene sheet
+sheetid = "Terpene"
+terpene <- read_excel(fh, sheet=sheetid, na="NA")
+cat("<br>",sheetid, " loaded")
+
+cat("<br>Number of", sheetid, "gene clusters per strain<br>")
+table(table(terpene$strain_id)) %>%
+    kbl() %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+cat("Number of", sheetid, "clusters observed 1x, 2x, 3x, etc<br>")
+table(table(terpene$terpene_seq)) %>%
+    kbl(col.names = c("NoTimesObserved","NoClusters" ) )%>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+terpene$terpene_seq <- as.factor(terpene$terpene_seq)
+terpene <- arrange(terpene, by=terpene_seq)
+terpene <- terpene %>% mutate(terpene_unique=paste("terp",cumsum(!duplicated(terpene_seq)), sep=""))
+terpene$terpene_unique[is.na(terpene$terpene_seq)] <- NA
+terpene <- arrange(terpene, by=strain_id)
+terpene <- terpene[,c("strain_id", "terpene_unique", "terpene_seq")]
+
+cat("Among the", sum(!is.na(terpene$terpene_seq)), "strain x", sheetid, "results, there are", 
+    length(na.omit(unique(terpene$terpene_unique))), "unique", sheetid, "gene clusters identified. There are",
+    sum(is.na(terpene$terpene_seq)), "strains with no", sheetid, "gene clusters identified.<br>")
+
+terpene_final <- terpene %>% distinct(strain_id, terpene_unique, .keep_all = TRUE) %>%
+  group_by(strain_id) %>%
+  mutate(row = row_number()) %>%
+  tidyr::pivot_wider(names_from = row, values_from = c(terpene_unique, terpene_seq))
+terpene_final <- terpene_final[,c("strain_id", "terpene_unique_1", "terpene_seq_1", "terpene_unique_2", "terpene_seq_2")]
+bgc_final <- merge(bgc_final, terpene_final, by  = "strain_id") 
+
+
+sheetid =  "Siderophore"
+siderophore <- read_excel(fh, sheet=sheetid, na="NA")
+cat("<br>",sheetid, " loaded")
+
+cat("<br>Number of", sheetid, "gene clusters per strain<br>")
+table(table(siderophore$strain_id)) %>%
+    kbl() %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+cat("Number of", sheetid, "clusters observed 1x, 2x, 3x, etc<br>")
+table(table(siderophore$siderophore_seq )) %>%
+    kbl(col.names = c("NoTimesObserved","NoClusters" ) )%>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+# Some strains contain 2 siderophore gene clusters
+siderophore$siderophore_seq <- as.factor(siderophore$siderophore_seq)
+siderophore <- arrange(siderophore, by=siderophore_seq)
+siderophore <- siderophore %>% mutate(siderophore_unique=paste("sid",cumsum(!duplicated(siderophore_seq)), sep=""))
+siderophore$siderophore_unique[is.na(siderophore$siderophore_seq)] <- NA
+siderophore <- arrange(siderophore, by=strain_id)
+siderophore <- siderophore[,c("strain_id", "siderophore_unique", "siderophore_seq")]
+cat("Among the", sum(!is.na(siderophore$siderophore_seq)), "strain x", sheetid, "results, there are", 
+    length(na.omit(unique(siderophore$siderophore_unique))), "unique", sheetid, "gene clusters identified. There are",
+    sum(is.na(siderophore$siderophore_seq)), "strains with no", sheetid, "gene clusters identified.<br>")
+
+siderophore_final <- siderophore %>% distinct(strain_id, siderophore_unique, .keep_all = TRUE) %>%
+  group_by(strain_id) %>%
+  mutate(row = row_number()) %>%
+  tidyr::pivot_wider(names_from = row, values_from = c(siderophore_unique, siderophore_seq))
+siderophore_final <- siderophore_final[,c("strain_id", "siderophore_unique_1", "siderophore_seq_1", "siderophore_unique_2", "siderophore_seq_2")]
+
+bgc_final <- merge(bgc_final,siderophore_final, by  = "strain_id") 
+
+
+sheetid = "RiPP"
+ripp <- read_excel(fh, sheet=sheetid, na="NA")
+cat("<br>",sheetid, " loaded")
+
+cat("<br>Number of", sheetid, "gene clusters per strain<br>")
+table(table(ripp$strain_id)) %>%
+    kbl() %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+cat("Number of", sheetid, "clusters observed 1x, 2x, 3x, etc<br>")
+table(table(ripp$ripp_seq )) %>%
+    kbl(col.names = c("NoTimesObserved","NoClusters" ) )%>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+# Some strains contain up to 3 bacteriocin gene clusters
+ripp$ripp_seq <- as.factor(ripp$ripp_seq)
+ripp <- arrange(ripp, by=ripp_seq)
+ripp <- ripp %>% mutate(ripp_unique=paste("ripp",cumsum(!duplicated(ripp_seq)), sep=""))
+ripp$ripp_unique[is.na(ripp$ripp_seq)] <- NA
+ripp <- arrange(ripp, by=strain_id)
+ripp <- ripp[,c("strain_id", "ripp_unique", "ripp_type", "ripp_seq_type", "ripp_seq")]
+cat("Among the",sum(!is.na(ripp$ripp_seq)), "strain x", sheetid, "results, there are", 
+   length(na.omit(unique(ripp$ripp_unique))), "unique", sheetid, "gene clusters identified. There are",
+   sum(is.na(ripp$ripp_seq)), "strains with no", sheetid, "gene clusters identified.<br>")
+
+ripp_final <- ripp %>% distinct(strain_id, ripp_unique, .keep_all = TRUE) %>%
+  group_by(strain_id) %>%
+  mutate(row = row_number()) %>%
+  tidyr::pivot_wider(names_from = row, values_from = c(ripp_unique, ripp_type, ripp_seq_type, ripp_seq))
+ripp_final <- ripp_final[,c("strain_id", "ripp_unique_1", "ripp_type_1", "ripp_seq_type_1", "ripp_seq_1", "ripp_unique_2", "ripp_type_2", "ripp_seq_type_2", 
+                            "ripp_seq_2", "ripp_unique_3", "ripp_type_3", "ripp_seq_type_3", "ripp_seq_3")]
+bgc_final <- merge(bgc_final,ripp_final , by  = "strain_id") 
+
+
+sheetid = "Other"
+other <- read_excel(fh, sheet=sheetid, na="NA")
+cat("<br>",sheetid, " loaded")
+
+cat("<br>Number of", sheetid, "gene clusters per strain<br>")
+table(table(other$strain_id)) %>%
+    kbl() %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+cat("Number of", sheetid, "clusters observed 1x, 2x, 3x, etc<br>")
+table(table(other$other_seq  )) %>%
+    kbl(col.names = c("NoTimesObserved","NoClusters" ) )%>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+# No strains contain >1 other gene cluster
+other$other_seq <- as.factor(other$other_seq)
+other <- arrange(other, by=other_seq)
+other <- other %>% mutate(other_unique=paste("oth",cumsum(!duplicated(other_seq)), sep=""))
+other$other_unique[is.na(other$other_seq)] <- NA
+other <- arrange(other, by=strain_id)
+other <- other[,c("strain_id", "other_type", "other_unique", "other_seq")]
+cat("Among the",sum(!is.na(other$other_seq)), "strain x", sheetid, "results, there are", 
+   length(na.omit(unique(other$other_unique))), "unique", sheetid, "gene clusters identified. There are",
+   sum(is.na(other$other_seq)), "strains with no", sheetid, "gene clusters identified.<br>")
+
+table(other$other_type) %>%
+    kbl() %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+betalactone <- subset(other, other_type=="Betalactone")
+names(betalactone)[names(betalactone)=="other_unique"] <- "beta_unique"
+betalactone$beta_unique <- gsub("oth", "beta", as.factor(betalactone$beta_unique))
+names(betalactone)[names(betalactone)=="other_seq"] <- "beta_seq"
+betalactone$other_type <- NULL
+cytolysin <- subset(other, other_type=="Cytolysin")
+names(cytolysin)[names(cytolysin)=="other_unique"] <- "cyto_unique"
+cytolysin$cyto_unique <- gsub("oth", "cyto", as.factor(cytolysin$cyto_unique))
+names(cytolysin)[names(cytolysin)=="other_seq"] <- "cyto_seq"
+cytolysin$other_type <- NULL
+ectoine <- subset(other, other_type=="Ectoine")
+names(ectoine)[names(ectoine)=="other_unique"] <- "ect_unique"
+ectoine$ect_unique <- gsub("oth", "ect", as.factor(ectoine$ect_unique))
+names(ectoine)[names(ectoine)=="other_seq"] <- "ect_seq"
+ectoine$other_type <- NULL
+nucleoside <- subset(other, other_type=="Nucleoside")
+names(nucleoside)[names(nucleoside)=="other_unique"] <- "nuc_unique"
+nucleoside$nuc_unique <- gsub("oth", "nuc", as.factor(nucleoside$nuc_unique))
+names(nucleoside)[names(nucleoside)=="other_seq"] <- "nuc_seq"
+nucleoside$other_type <- NULL
+phenazine <- subset(other, other_type=="Phenazine")
+names(phenazine)[names(phenazine)=="other_unique"] <- "phen_unique"
+phenazine$phen_unique <- gsub("oth", "phen", as.factor(phenazine$phen_unique))
+names(phenazine)[names(phenazine)=="other_seq"] <- "phen_seq"
+phenazine$other_type <- NULL
+other_final <- merge(merge(merge(merge(betalactone, cytolysin, by="strain_id", all.x=TRUE, all.y=TRUE), ectoine, by="strain_id", all.x=TRUE, all.y=TRUE),
+                           nucleoside, by="strain_id", all.x=TRUE, all.y=TRUE), phenazine, by="strain_id", all.x=TRUE, all.y=TRUE)
+other_final$beta_unique[other_final$beta_unique=="beta7"] <- "beta1"
+other_final$cyto_unique[other_final$cyto_unique=="cyto5"] <- "cyto1"
+other_final$nuc_unique[other_final$nuc_unique=="nuc6"] <- "nuc1"
+other_final$phen_unique[other_final$phen_unique=="phen8"] <- "phen1"
+
+
+bgc_final <- merge(bgc_final,other_final, by  = "strain_id", all.x = TRUE) 
+
+gcColumns = data.frame("Colname" = grep("unique", colnames(bgc_final), value = TRUE),
+                                "ClusterType" = gsub("_unique.*", "", grep("unique", colnames(bgc_final), value = TRUE)),
+                                stringsAsFactors = FALSE)
+bgc_final$num_bgc = rowSums(!is.na(bgc_final[,gcColumns$Colname]))
+
+```
+# Data summary
+
+```{r metasummary, echo = FALSE, results = "asis", warning = FALSE}
+table1(~location + country + species + ave_coverage + completeness + contamination + num_bgc | specimen_source  , data = bgc_final)
+```
+
+# Analysis 
+## Respiratory strains of Corynebacterium
+
+Focused analyses of the strains isolated from the respiratory tract, excludeing strains corresponding to novel species 
+
+
+### Summary of number of bacterial gene clusters identified per type of cluster and per respiratory strain
+
+```{r resp, echo = FALSE, results = "asis", fig.dev= "pdf"}
+bgc_resp <- subset(bgc_final, specimen_source=="Respiratory" & species!="unknown")
+
+
+ngs_by_class = lapply(unique(gcColumns$ClusterType), function(x) {
+    length(unique(na.omit(c(unlist(bgc_resp[, gcColumns$Colname[which(gcColumns$ClusterType ==x)]])))))
+})
+names(ngs_by_class) = unique(gcColumns$ClusterType)
+ngs_by_class = do.call(rbind, ngs_by_class)
+colnames(ngs_by_class) = "NoUniqueGeneClusters"
+ngs_by_class %>%
+    kbl(caption = "Number of unique gene clusters identified across all respiratory strains") %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+ngs_by_class_persample = lapply(unique(gcColumns$ClusterType), function(x) {
+   rowSums(!is.na(bgc_resp[, gcColumns$Colname[which(gcColumns$ClusterType ==x)], drop = FALSE]))
+})
+ngs_by_class_persample = data.frame(do.call(cbind, ngs_by_class_persample))
+colnames(ngs_by_class_persample ) = unique(gcColumns$ClusterType)
+row.names(ngs_by_class_persample) =  bgc_resp$strain_id
+ngs_by_class_persample = merge(ngs_by_class_persample , bgc_resp[, c("strain_id","num_bgc", "country")], by.x = "row.names", by.y = "strain_id")
+table1(~ factor(pks) + factor(nrps) + factor(nrps_like) + factor(napaa) + factor(terpene) + 
+        factor(siderophore) + factor(ripp) + factor(beta) + factor(cyto) + factor(ect) + factor(nuc) + factor(phen) + factor(num_bgc) | country, 
+    data = ngs_by_class_persample,
+    footnote = "Number of gene clusters per respiratory strain")
+
+table1(~ pks + nrps + nrps_like + napaa + terpene + 
+        siderophore + ripp + beta + cyto + ect + nuc + phen + num_bgc |country, 
+    data = ngs_by_class_persample,
+    footnote = "Number of gene clusters per respiratory strain")
+
+cat("<br>Wilcox rank sum test for differences in number of bcgs per strain by country of origin")
+byC = lapply(colnames(ngs_by_class_persample)[2:(ncol(ngs_by_class_persample)-1)], function(x) 
+    wilcox.test(ngs_by_class_persample[,x] ~ ngs_by_class_persample[, "country"], exact=FALSE)$p.value
+)
+names(byC )= colnames(ngs_by_class_persample)[2:(ncol(ngs_by_class_persample)-1)]
+byC = do.call(rbind, byC)
+colnames(byC) = "WilcoxPvalue"
+byC %>%
+    kbl() %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+
+bcgCountXStrain <- ngs_by_class_persample %>% pivot_longer(cols = -c("Row.names", "country"), names_to= "BGC", values_to="count")
+
+ggplot(bcgCountXStrain, aes(x = count,  group = country, fill = country)) +
+     geom_bar(position = "stack") + facet_wrap(~ BGC, scale = "free_y") + 
+     theme_minimal() + scale_x_continuous(breaks=seq(0, 10, 2)) + 
+     ggtitle("Distribution of the number of BCGs per strain") + xlab("Number of BCGs per strain")
+
+```
+
+```{r resp_summary_figure, echo = FALSE, results = "asis", fig.dev= "pdf"}
+# Generate a figure summarizing the mean number of BGCs by Corynebacterium species
+# Note that there are no gene clusters for betalactones in respiratory strains
+
+bgc_fig1 <-  merge(ngs_by_class_persample , bgc_resp[, c("strain_id", "species")], by.x = "Row.names", by.y = "strain_id")
+
+bgc_fig1$species_fig <- bgc_fig1$species
+bgc_fig1$species_fig[bgc_fig1$species=="accolens"] <- "C. accolens"
+bgc_fig1$species_fig[bgc_fig1$species=="kefirresidentii"] <- "C. kefirresidentii"
+bgc_fig1$species_fig[bgc_fig1$species=="propinquum"] <- "C. propinquum"
+bgc_fig1$species_fig[bgc_fig1$species=="pseudodiphtheriticum"] <- "C. pseudodiphtheriticum"
+bgc_fig1$species_fig[bgc_fig1$species=="tuberculostearicum"] <- "C. tuberculostearicum"
+bgc_fig1$species_fig[bgc_fig1$species=="amycolatum" | bgc_fig1$species=="appendicis" | bgc_fig1$species=="aurimucosum" | bgc_fig1$species=="bovis" | 
+                       bgc_fig1$species=="coyleae" | bgc_fig1$species=="freneyi" | bgc_fig1$species=="striatum" |
+                       bgc_fig1$species=="mastitidis"] <- "Other"
+
+
+bcgCountXStrain <- bgc_fig1 %>% 
+    pivot_longer(cols = -c("Row.names", "country", "species", "species_fig"), names_to= "BGC", values_to="count")
+
+ggplot(bcgCountXStrain, aes(x = count,  group = species_fig, fill = species_fig)) +
+     geom_bar(position = "stack") + facet_wrap(~ BGC, scale = "free_y") + 
+     theme_minimal() + scale_x_continuous(breaks=seq(0, 10, 2)) + 
+     ggtitle("Distribution of the number of BCGs per strain") + xlab("Number of BCGs per strain")
+
+
+bgc_fig1 <- aggregate(bgc_fig1[,2:14], list(bgc_fig1$species_fig, bgc_fig1$country), mean)
+bgc_fig1 <- gather(bgc_fig1, num, mean, pks:phen, factor_key = TRUE)
+names(bgc_fig1)[names(bgc_fig1) == "Group.1"] <- "species_fig"
+names(bgc_fig1)[names(bgc_fig1) == "Group.2"] <- "country"
+
+colors_11 <- c("grey60","chartreuse", "dodgerblue1", "black", "yellow", "#6A3D9A", "green4", "#CAB2D6", "blue1", "#ff8c00", "brown", "#E31A1C")
+
+bgc_fig1$num <- factor(bgc_fig1$num, levels=c("beta","cyto", "ect", "napaa", "nrps","nrps_like", "nuc", 
+                                              "phen", "pks", "ripp", "siderophore", "terpene"), 
+                       labels=c("Betalactone", "Cytolysin", "Ectoine", "NAPAA", "NRPS", "NRPS-like", "Nucleoside", "Phenazine", "PKS",
+                                "RiPP", "Siderophore", "Terpene" )) 
+                                
+bgc_fig1$species_fig <- factor(bgc_fig1$species_fig, levels = c("C. accolens", "C. kefirresidentii", "C. propinquum", 
+                                                                "C. pseudodiphtheriticum", "C. tuberculostearicum", "Other"))
+
+addmargins(table(bgc_resp$species, bgc_resp$country)) %>%
+    kbl() %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+ggplot(bgc_fig1, aes(fill=num, y=species_fig, x=mean)) + geom_bar(position="stack", stat="identity") + 
+  geom_col(position = position_stack(reverse = TRUE)) +
+  theme(legend.text=element_text(size=16), legend.title=element_text(size=18), 
+        axis.title.y = element_text(angle=90, size=18), 
+        axis.text.y = element_text(size=16, colour="black"), axis.title.x = element_text(size=18), 
+        axis.text.x = element_text(size=16, colour="black"), plot.title = element_text(size=17, hjust=1.4), 
+        strip.text.x = element_text(size = 16), strip.background=element_rect(fill="white"), panel.background = element_blank()) + 
+  scale_fill_manual(values=colors_11) + scale_y_discrete(limits=rev) + xlab("Mean number of BGCs") + ylab("") +
+  guides(fill = guide_legend(ncol=1, byrow=TRUE, title=""))
+
+```
+
+```{r resp_summary_figure_part2, echo = FALSE, results = "asis", fig.dev= "pdf", fig.width = 10}
+
+ggplot(bgc_fig1, aes(fill=num, y=species_fig, x=mean)) + geom_bar(position="stack", stat="identity") + 
+  geom_col(position = position_stack(reverse = TRUE)) +
+  theme(legend.text=element_text(size=16), legend.title=element_text(size=18), 
+        axis.title.y = element_text(angle=90, size=18), 
+        axis.text.y = element_text(size=16, colour="black"), axis.title.x = element_text(size=18), 
+        axis.text.x = element_text(size=16, colour="black"), plot.title = element_text(size=17, hjust=1.4), 
+        strip.text.x = element_text(size = 16), strip.background=element_rect(fill="white"), panel.background = element_blank()) + 
+  scale_fill_manual(values=colors_11) + scale_y_discrete(limits=rev) + xlab("Mean number of BGCs") + ylab("") +
+  guides(fill = guide_legend(ncol=1, byrow=TRUE, title="")) + facet_wrap("country")
+
+
+```
+
+
+
+```{r writefasta, echo = FALSE, eval = FALSE, results = 'asis'}
+
+writeFasta <- function(data, filename){
+  fastaLines = c()
+  for (rowNum in 1:nrow(data)){
+    fastaLines = c(fastaLines, as.character(paste(">", data[rowNum,"name"], sep = "")))
+    fastaLines = c(fastaLines,as.character(data[rowNum,"seq"]))}
+  fileConn<-file(filename)
+  writeLines(fastaLines, fileConn)
+  close(fileConn)}
+
+set.seed(1234)
+
+pks_ids <- unique(append(bgc_resp$pks_unique_1, bgc_resp$pks_unique_2))
+pks_ids <- pks_ids[!is.na(pks_ids)]
+pks_fasta <- subset(pks, pks$pks_unique %in% pks_ids)
+pks_fasta <- pks_fasta %>% group_by(pks_unique) %>% sample_n(1)
+pks_fasta$name <- gsub(" ", "", paste(pks_fasta$pks_type, "_", pks_fasta$pks_unique, "_", pks_fasta$strain_id))
+names(pks_fasta)[names(pks_fasta)=="pks_seq"] <- "seq"
+pks_fasta$seq <- as.character(pks_fasta$seq)
+pks_fasta <- pks_fasta[,c("name","seq")]
+writeFasta(pks_fasta, "pks.fasta")
+
+ripp_ids <- unique(append(append(append(bgc_resp$ripp_unique_1, bgc_resp$ripp_unique_2), bgc_resp$ripp_unique_3), bgc_resp$ripp_unique_4))
+ripp_ids <- ripp_ids[!is.na(ripp_ids)]
+ripp_fasta <- subset(ripp, ripp$ripp_unique %in% ripp_ids)
+ripp_fasta <- ripp_fasta %>% group_by(ripp_unique) %>% sample_n(1)
+ripp_fasta$name <- gsub(" ", "", paste(ripp_fasta$ripp_unique, "_", ripp_fasta$strain_id))
+names(ripp_fasta)[names(ripp_fasta)=="ripp_seq"] <- "seq"
+ripp_fasta$seq <- as.character(ripp_fasta$seq)
+ripp_fasta <- subset(ripp_fasta, ripp_type=="bacteriocin_IId")
+ripp_fasta <- ripp_fasta[,c("name","seq")]
+writeFasta(ripp_fasta, "RiPPS_classIId.fasta")
+
+
+```

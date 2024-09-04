@@ -1,0 +1,17 @@
+GeneGrouper -n top3 -d NRPS -g genomes find_regions -f query_genes/top3.txt -us 5000 -ds 5000 -i 20 -c 80
+
+GeneGrouper -n ./top3 -d ./NRPS visualize --visual_type main
+
+# all genes
+
+GeneGrouper -n allgenes -d NRPS -g genomes find_regions -f query_genes.fna -us 50000 -ds 50000 -i 20 -c 80
+
+GeneGrouper -n ./allgenes -d ./NRPS visualize --visual_type main
+
+
+
+# all genes updated
+
+GeneGrouper -n allgenes_updated -d NRPS -g genomes_updated find_regions -f query_genes.fna -us 50000 -ds 50000 -i 20 -c 80
+
+GeneGrouper -n ./allgenes_updated -d ./NRPS visualize --visual_type main
