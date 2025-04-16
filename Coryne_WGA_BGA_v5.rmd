@@ -1,0 +1,971 @@
+---
+title: Coryne BGC analysis
+author: Rachel Myers, Ilya Zhbannikov 
+date: "`r Sys.Date()`"
+output: 
+    html_document:
+        toc: true
+        self.contained: true
+---
+
+# Coryne genomes analysis
+# Preliminaries
+
+## Credits
+Author: Rachel Myers
+
+Investigator: Dr. Matthew Kelly
+
+Date: `r Sys.Date()`
+
+## Recreating this report
+
+1. Ensure that the R packages rmarkdown, knitr, and those listed below are installed
+
+2. Ensure that the file Coryne_WGA.rmd is in your working directory in R, change your R's working directory if needed 
+
+3. Copy and paste the below code chunk into R, updating the path for the file coryne_metadata_032923.xlsx as appropraite for your system
+
+```{r recreate, echo = TRUE, eval = FALSE,  results = "asis"}
+
+rm(list= ls(all= TRUE))
+require("rmarkdown")
+require("knitr")
+setwd("antismash")
+fh_metadata <- "coryne_metadata_051823.xlsx"
+fh_antismash <- "All_antismashProto_cores.txt"
+fh_antismash_references <- "All_antismashProto_cores.txt"
+fh_antismash_MSK122 <- "All_antismashProto_cores.txt"
+render("Coryne_WGA_BGA_v5.rmd", c("html_document"))
+
+```
+
+
+
+## Load packages and functions
+
+Required r packages: 
+
+
+* readxl
+* tidverse
+* ggplot2
+* kableExtra
+* table1
+
+Set seed for reproducibility of random processes
+
+```{r loadpackages, echo = F, warnings = F, error = F, message = F}
+require(readxl)
+require(ggplot2)
+require(tidyverse)
+require(kableExtra)
+require(table1)
+require(reshape2)
+library(patchwork)
+require(muscle)
+require(ggmsa)
+require(msa)
+set.seed(1234)
+source("multiplot.R")
+```
+
+##  Load & Clean Datasets
+
+* Load excel file with metadata and gene cluster results
+
+Data cleaning
+
+* meta characteristics - none 
+* for each type of gene cluster, add a unique gene cluster identifier for each unique sequence
+
+Note: 
+
+These samples have BGC analysis but should not be included for analysis for the reason documented.
+
+Not Corynebacterium species: 05-009, 05-117, 05-135, 05-178, 05-203, 05-210, 05-236, 05-257, 05-271
+
+Contaminated genome: 05-042, 05-063, 05-086, 05-094, 05-209, 05-213, 05-225, 05-226, 05-260; 05-220
+
+
+```{r loaddata, echo = F, results = "asis", error = F, warning = F}
+
+# meta data sheet - one row per strain / sample id
+#metadata <- read_excel(fh_metadata, sheet="Metadata", na="NA")
+metadata <- read_excel(fh_metadata, sheet="coryne_metadata", na="NA")
+metadata <- metadata[order(metadata$strain_id), ]
+metadata$unknown_strains <- NULL
+cat("<br>Metadata loaded")
+
+# Adding references to meta-data
+references <- readxl::read_xlsx("References_20241216.xlsx")
+ref_id_used <- data.table::fread("references/genomes/accessions.txt", header=F)
+references <- references[which(references$`Assembly Accession` %in% ref_id_used$V1), ]
+# Exclude GCF_016889425.1 and GCF_900478045.1:
+references <- references[which(!(references$`Assembly Accession` %in% c("GCF_016889425.1", "GCF_900478045.1"))), ]
+# Add these reference genomes to meta data
+references$strain_id <- references$`Organism Infraspecific Names Strain`
+references$lab <- references$location <- references$country <- references$specimen_source_cat <- references$specimen_source <- references$set <- references$ave_coverage <- references$completeness <- references$contamination <- references$comments <- NA
+references$biorepository_id <- references$`Assembly Accession`
+references$ANIb <- 100
+references$specimen_source_cat <- "Respiratory"
+references$country <- references$NCBI <- references$specimen_source <- "NCBI Reference"
+references$final_species <- do.call(rbind, str_split(references$`Organism Name`, pattern = " "))[, 2]
+references$closest_relative <- references$final_species
+references$deposit_id <- paste("C", references$final_species, gsub("_", "", references$assembly_accession), sep="_")
+
+metadata <- rbind(metadata, references[,colnames(metadata)])
+
+
+#exclude some strains as requested
+to_remove <- unique(read.csv("protocores_respiratory_to_remove.csv")$strain_id)
+metadata <- metadata[ which(!(metadata$strain_id %in% to_remove)), ]
+
+protocores <- read.table(fh_antismash , sep = "\t", header= TRUE)
+cat("<br>Parsed cluster protocores loaded")
+
+# modify the protocore subject id to match thoes in metachars
+protocores$subjectid <- gsub("^.*_KPL_", "", protocores$subjectid )
+
+# Adding protocores obtained from references:
+protocores_ref <- read.table(fh_antismash_references , sep = "\t", header= TRUE)
+cat("<br>Parsed cluster protocores obtained from references loaded")
+protocores_ref <- protocores_ref[, colnames(protocores)]
+protocores_ref$subjectid <- str_extract(protocores_ref$gbk_filename, "GCF_[0-9]+.[0-9]")
+protocores <- rbind(protocores, protocores_ref)
+
+# Replace BWA122 with MSK122
+protocores <- protocores[which(!(protocores$subjectid %in% "05-122")), ]
+protocores_msk122 <- read.table(fh_antismash_MSK122 , sep = "\t", header= TRUE)
+protocores_msk122$subjectid <- "05-122"
+colnames(protocores)[which(!(colnames(protocores) %in% colnames(protocores_msk122)))]
+protocores_msk122$parent_ids_CDS <- protocores_msk122$phase_CDS <- protocores_msk122$name_CDS <- protocores_msk122$product_CDS <- protocores_msk122$protein_id_CDS <-  protocores_msk122$inference_CDS <- protocores_msk122$ec_number_CDS <- protocores_msk122$note_CDS <- NA      
+protocores <- rbind(protocores, protocores_msk122)
+
+
+cat("<br>Number of specimen ids found in both files:", sum(unique(protocores$subjectid) %in% metadata$biorepository_id))
+cat("<br>Specimen ids in metadata, not found in BGA outputs:", paste(metadata$biorepository_id[which(!metadata$biorepository_id %in% protocores$subjectid)], collapse = "; "))
+cat("<br>Specimen ids in BGA outputs, not found in metadata:", paste(unique(protocores$subjectid)[which(!unique(protocores$subjectid) %in% metadata$biorepository_id)], collapse = "; "))
+
+cat("<br>Proceeding with the intersection of the meta characteristics file and BGA specimen<br>")
+
+protocores <- merge(metadata, protocores, by.x = "biorepository_id", by.y = "subjectid")
+protocores$product_protoCore <- gsub("-", "_", protocores$product_protoCore )
+
+protocores$product_protoCoreFamily <- ifelse( 
+    protocores$product_protoCore == "terpene", "Terpenes",
+    ifelse( protocores$product_protoCore == "siderophore", "Siderophores",
+    ifelse( protocores$product_protoCore == "NAPAA", "NAPAAs",
+    ifelse( protocores$product_protoCore %in% c("NRPS","NRPS_like"), "NRPSandNRPSlike",
+    ifelse( protocores$product_protoCore %in% c("T1PKS", "T3PKS", "transAT_PKS"), "PKS",
+    ifelse( protocores$product_protoCore %in% c("lanthipeptide_class_i", "lanthipeptide_class_iv",  "lanthipeptide_class_v", "LAP", "lassopeptide", "linaridin", "RiPP_like", "thiopeptide", "RRE_containing", "class_iid_bacteriocin"), "RiPP",
+    ifelse( protocores$product_protoCore %in% c("betalactone", "ectoine", "nucleoside", "phenazine"), "Other", NA))))))
+)
+
+protocores$product_protoCoreFamily2 <- ifelse( 
+    protocores$product_protoCore == "terpene", "Terpenes",
+    ifelse( protocores$product_protoCore == "siderophore", "Siderophores",
+    ifelse( protocores$product_protoCore == "NAPAA", "NAPAAs",
+    ifelse( protocores$product_protoCore %in% c("T1PKS", "T3PKS", "transAT_PKS"), "PKS",
+    ifelse( protocores$product_protoCore %in% c("lanthipeptide_class_i", "lanthipeptide_class_iv",  "lanthipeptide_class_v", "LAP", "lassopeptide", "linaridin", "RiPP_like", "thiopeptide", "class_iid_bacteriocin"), "RiPP",
+    ifelse( protocores$product_protoCore == "betalactone", "Betalactone", 
+    ifelse(protocores$product_protoCore == "ectoine", "Ectoine", 
+    ifelse(protocores$product_protoCore == "nucleoside", "Nucleoside", 
+    ifelse(protocores$product_protoCore == "phenazine", "Phenazine", 
+    ifelse(protocores$product_protoCore == "cytolysin", "Cytolysin", "Other")))))))))
+)
+
+
+# manually update the RiPP_like product protoCore label to the granular version in gene_functions_CDS
+sfilter <- which(protocores$product_protoCore == "RiPP_like" & grepl("DUF692", protocores$gene_functions_CDS))
+protocores$product_protoCore[sfilter] <- "DUF692_associated_bacteriocin"
+sfilter <- which(protocores$product_protoCore == "RiPP_like" & grepl("Lactococcin_972", protocores$gene_functions_CDS))
+protocores$product_protoCore[sfilter] <- "class_iid_bacteriocin"
+
+cat("<br>Protein product to Class/Family mapping<br>")
+kbl(table(protocores$product_protoCore, protocores$product_protoCoreFamily, useNA = "ifany")) %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+cat("<br>Protein product to Class/Family mapping-2<br>")
+kbl(table(protocores$product_protoCore, protocores$product_protoCoreFamily2, useNA = "ifany")) %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+
+# assign sequences unique identifiers 
+uniqueSeqs <- protocores[!duplicated(protocores$translation), c( "product_protoCore", "translation", "deposit_id","final_species", "contig_edge", "strain_id","regionName", "gbk_filename"  )]
+
+uniqueSeqs$UniqueClusterID <- NA
+uniqueSeqs$SeqNumber <- 1
+for (ct in unique(uniqueSeqs$product_protoCore)) {
+    rfilter <- which(uniqueSeqs$product_protoCore == ct)
+    uniqueSeqs$SeqNumber[rfilter] <-cumsum(!duplicated(uniqueSeqs$translation[rfilter]))
+    uniqueSeqs$UniqueClusterID[rfilter] <- gsub("-", "_", paste(ct, cumsum(!duplicated(uniqueSeqs$translation[rfilter])), sep = "_"))
+}
+
+protocores = merge(protocores, uniqueSeqs[, c( "product_protoCore", "translation", "final_species", "contig_edge", "UniqueClusterID" , "SeqNumber")], all.x = TRUE)
+
+BGC_Orders = data.frame("Name" = c( 
+  "NRPSandNRPSlike",
+                "NRPS",
+                "NRPS_like",
+  "NAPAAs", 
+                "NAPAA",
+  "PKS",
+                "T1PKS", 
+                "T3PKS", 
+                "transAT_PKS",
+  "RiPP",
+                "lanthipeptide_class_i", 
+                "lanthipeptide_class_iv",  
+                "lanthipeptide_class_v", 
+                "LAP", 
+                "lassopeptide", 
+                "linaridin", 
+                "DUF692_associated_bacteriocin",
+                "class_iid_bacteriocin",
+                "RRE_containing",
+                "thiopeptide",
+  "Terpenes", 
+                "terpene",
+  "Siderophores",
+                "siderophore",
+  "Other",
+                "betalactone", 
+                "ectoine", 
+                "nucleoside", 
+                "phenazine"),
+                "Order" = seq(1,29),
+                "level" = c("Family", "Child", "Child", # NRPSandNRPSlike
+                            "Family", "Child", # NAPAAs
+                            "Family",  "Child", "Child", "Child", # PKS
+                    "Family", "Child", "Child", "Child","Child", "Child", "Child","Child", "Child","Child", "Child", # RiPP
+                    "Family", "Child", # Terpenes
+                    "Family", "Child", # Siderophores
+                    "Family", "Child", "Child","Child", "Child"), #Other
+                stringsAsFactors = FALSE
+             )
+
+# write.csv(protocores[!duplicated(protocores$gene_functions_CDS), c("product_protoCore",  "product_CDS", "gene_functions_CDS", "contig_edge", "biorepository_id")], "../../Data/WGS/processed/antismashOutputs/antismash_CDS_annotation.csv", row.names = FALSE)
+
+#ddd <- uniqueSeqs[which(uniqueSeqs$product_protoCore == "T1PKS" & uniqueSeqs$contig_edge == "False"),]
+#ddd <- ddd[which(ddd$final_species %in% metadata$final_species[which(metadata$specimen_source_cat == "Respiratory")]), ]
+#
+#ddd1 <- read.csv("/Volumes/BioCAT/BioCAT_Projects/2022_KellyM_Coryne/Data/BGC/MultipleAlignments/UniqueSequences.csv")
+#ddd1 <- ddd1[which(ddd1$product_protoCore == "T1PKS" & ddd1$contig_edge == "False"),]
+#
+#ddd$final_species[which(!(ddd$final_species %in% ddd1$final_species))]
+#ddd$translation[which(!(ddd$translation %in% ddd1$translation))]
+#ddd$deposit_id[which(!(ddd$deposit_id %in% ddd1$deposit_id))]
+#
+#duplicated(ddd$strain_id)
+
+
+```
+
+## Bacterial genome statistics
+
+```{r, results='asis', echo=F, message=F, warning=F}
+
+bgc_upd <- read.csv("protocores_respiratory_2025-01-27.csv")
+fastafh <- list.files(".", pattern = "fasta", full.names = TRUE )
+fastafh <- c(fastafh, list.files(".", pattern = "fasta", full.names = TRUE ))
+
+ids_to_keep <- c()
+for(n in unique(bgc_upd$strain_id)) {
+    ids_to_keep <- c(ids_to_keep, grep(pattern = n, x = fastafh, ignore.case = T))
+}
+fastafh <- fastafh[ids_to_keep]
+
+# Add references:
+fastafh <- c(fastafh, list.files("references/genomes/fasta/", pattern = "fna", full.names = TRUE ))
+# Remove 2 references GCF_016889425.1 and GCF_900478045.1 we did not use:
+fastafh <- fastafh[-grep("GCF_016889425.1", fastafh)]
+fastafh <- fastafh[-grep("GCF_900478045.1", fastafh)]
+
+# Remove BWA122:
+fastafh <- fastafh[-grep("Corynebacterium_BWA122.fasta", fastafh)]
+
+# Add MSK122
+fastafh <- c(fastafh, "C_marquesiae_MSK122.fasta")
+
+#fastadata = lapply(fastafh, readAAStringSet )
+fastadata1 = lapply(fastafh, seqinr::read.fasta )
+ln <- sapply(seqinr::getLength(fastadata1), sum)
+
+cat("<br>Mean genome length: ", mean(ln), ", s.d.: ", sd(ln), ", Min, max:", min(ln), ", ", max(ln), "\nTotal genomes: ", length(ln), "</br>")
+
+temp <- data.frame(table(bgc_upd$biorepository_id))
+cat("<br>Mean and median (interquartile range) of BGCs per specimen<br>")
+ans <- quantile(temp$Freq, type = 5)
+cat("Mean:", mean(temp$Freq), ", Median:", ans[3],  "(", ans[2], ", ", ans[4], ")\n")
+
+
+
+```
+
+
+# Summary of BGC results
+
+There are `r nrow(protocores)` proto core genes identified in the `r length(unique(protocores$biorepository_id))` specimen analyzed. 
+
+There are `r nrow(protocores[which(protocores$contig_edge == "False"),])` proto core genes are in clusters that __do not__ include a contig edge;
+`r nrow(protocores[which(protocores$contig_edge == "True"),])` proto core genes are in clusters that overlap a contig edge. 
+
+
+These correspond to `r nrow(uniqueSeqs)` unique protein sequences across `r length(unique(uniqueSeqs$product_protoCore))` BGC type identified by antismash.
+
+
+
+## Number of (any) BGC per specimen
+
+Overall, how many BGC clusters are identified per specimen, ignoring BGC type or unique protein sequence?
+
+```{r bcgbytype_summaries, echo = FALSE, results = "asis", error = F, warning = F}
+#protocores <- bgc_upd
+
+cat("<br>Histogram of the number BGC clusters per specimen<br>")
+temp <- data.frame(table(protocores$biorepository_id))
+ggplot(temp, aes(x = Freq)) + geom_bar() +  theme_minimal() + 
+    xlab("Number of BGCs") + ylab("Number of specimen") + 
+    scale_x_continuous(breaks = seq(0, max(temp$Freq)))
+
+cat("<br>Mean and median (interquartile range) of BGCs per specimen<br>")
+ans <- quantile(temp$Freq, type = 5)
+cat("Mean:", mean(temp$Freq), ", Median:", ans[3],  "(", ans[2], ", ", ans[4], ")\n")
+
+temp_v2 <- data.frame(table(temp$Freq))
+temp_v2$Percent <- round(100*temp_v2$Freq / length(unique(protocores$biorepository_id)), digits = 1)
+colnames(temp_v2) <- c("NoBCGsPerSample", "NoSamples", "PercentOfSamples")
+cat("<br>Data table for the above figure<br>")
+kbl(temp_v2, row.names = FALSE) %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+colnames(temp) <- c("biorepository_id", "BGCcount")
+metadata <- merge(metadata, temp, by = "biorepository_id")
+
+
+
+rm(temp,temp_v2)
+```
+
+Overall, how many distinct BGC cluster gene sequences are identified per specimen, ignoring BGC type?
+
+```{r bcgbyseq_summaries, echo = FALSE, results = "asis", error = F, warning = F}
+
+cat("<br>Histogram of the number  distinct BGC cluster gene sequences per specimen<br>")
+temp <- data.frame(table(protocores$biorepository_id, protocores$UniqueClusterID))
+temp <- data.frame(table(temp[which(temp$Freq > 0),]$Var1))
+
+ggplot(temp, aes(x = Freq)) + geom_bar() +  theme_minimal() + 
+    xlab("Number of BGC protein sequences") + ylab("Number of specimen") + 
+    scale_x_continuous(breaks = seq(0, max(temp$Freq)))
+
+cat("<br>Mean and median (interquartile range) of BGCs per specimen<br>")
+ans <- quantile(temp$Freq, type = 5)
+cat("Mean:", mean(temp$Freq), ", Median:", ans[3],  "(", ans[2], ", ", ans[4], ")\n")
+
+
+temp_v2 <- data.frame(table(temp$Freq))
+temp_v2$Percent <- round(100*temp_v2$Freq / length(unique(protocores$biorepository_id)), digits = 1)
+colnames(temp_v2) <- c("NoBCGsSeqsPerSample", "NoSamples", "PercentOfSamples")
+cat("<br>Data table for the above figure<br>")
+kbl(temp_v2)  %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+colnames(temp) <- c("biorepository_id", "BGCUniqueSeqcount")
+metadata <- merge(metadata, temp, by = "biorepository_id", all.x = TRUE)
+
+rm(temp,temp_v2)
+```
+
+
+## Number of BGC per specimen per BGC type
+
+Within each of the BGC groups identififed by antiSMASH, how many clusters are identified per specimen, ignoring unique protein sequence?
+
+```{r bcgclust_summaries_family, echo = FALSE, results = "asis", error = F, warning = F}
+cat("<br> Number of BGCs detected per type<br>")
+kbl(table(protocores$product_protoCoreFamily))  %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+kbl(table(protocores$product_protoCoreFamily2))  %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+
+
+
+cat("<br>Histogram of the number BGC clusters per specimen per BGC group<br>")
+temp <- data.frame(table(protocores$biorepository_id, protocores$product_protoCoreFamily))
+ggplot(temp, aes(x = Freq)) + geom_bar() + 
+    facet_wrap(~ Var2, scales = "free") + theme_minimal() + 
+    xlab("Number of BGCs") + ylab("Number of specimen") + 
+    scale_x_continuous(breaks= c(0,1,2,3,4))
+
+temp <- data.frame(table(protocores$biorepository_id, protocores$product_protoCoreFamily2))
+ggplot(temp, aes(x = Freq)) + geom_bar() + 
+    facet_wrap(~ Var2, scales = "free") + theme_minimal() + 
+    xlab("Number of BGCs") + ylab("Number of specimen") + 
+    scale_x_continuous(breaks= c(0,1,2,3,4))
+
+
+cat("<br>Bar plot of per-specimen counts of each BCG group<br>")
+temp_v2 <- data.frame(table(temp$Var2, temp$Freq))
+temp_v2 <- temp_v2[order(temp_v2$Var1), ]
+ggplot(temp_v2[which(temp_v2$Freq > 0 & temp_v2$Var2 != 0),], aes(x = Var1, y = Freq, fill = Var2)) + 
+    geom_bar(stat = "identity", position = "stack") + theme_minimal() + 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + xlab("") +ylab("Number of specimen")
+
+cat("<br>Data shown in the figure above<br>")
+temp_v2$Percent <- round(100*temp_v2$Freq / length(unique(protocores$biorepository_id)), digits = 1)
+colnames(temp_v2) <- c("BGC", "NoTimesPerSample", "NoSamples", "PercentOfSamples")
+kbl(temp_v2[which(temp_v2$NoSamples > 0 & temp_v2$NoTimesPerSample != 0),], row.names = FALSE)  %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+
+temp <- as.data.frame.matrix(table(protocores$biorepository_id, protocores$product_protoCoreFamily))
+colnames(temp) <- paste(colnames(temp), "_BGCCount", sep = "")
+metadata <- merge(metadata, temp, by.x = "biorepository_id", by.y = "row.names")
+
+#temp <- as.data.frame.matrix(table(protocores$biorepository_id, protocores$product_protoCoreFamily2))
+#colnames(temp) <- paste(colnames(temp), "_BGCCount", sep = "")
+#metadata <- merge(metadata, temp, by.x = "biorepository_id", by.y = "row.names")
+
+rm(temp, temp_v2)
+```
+
+
+
+Within each of the BGC types identififed by antiSMASH, how many clusters are identified per specimen, ignoring unique protein sequence?
+
+```{r bcgclust_summaries, echo = FALSE, results = "asis", error = F, warning = F}
+cat("<br> Number of BGCs detected per type<br>")
+kbl(table(protocores$product_protoCore))  %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+
+cat("<br>Histogram of the number BGC clusters per specimen per BGC type<br>")
+temp <- data.frame(table(protocores$biorepository_id, protocores$product_protoCore))
+ggplot(temp, aes(x = Freq)) + geom_bar() + 
+    facet_wrap(~ Var2, scales = "free") + theme_minimal() + 
+    xlab("Number of BGCs") + ylab("Number of specimen") + 
+    scale_x_continuous(breaks= c(0,1,2,3,4))
+
+cat("<br>Bar plot of per-specimen counts of each BCG type<br>")
+temp_v2 <- data.frame(table(temp$Var2, temp$Freq))
+temp_v2 <- temp_v2[order(temp_v2$Var1), ]
+ggplot(temp_v2[which(temp_v2$Freq > 0 & temp_v2$Var2 != 0),], aes(x = Var1, y = Freq, fill = Var2)) + 
+    geom_bar(stat = "identity", position = "stack") + theme_minimal() + 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + xlab("") +ylab("Number of specimen")
+
+cat("<br>Data shown in the figure above<br>")
+temp_v2$Percent <- round(100*temp_v2$Freq / length(unique(protocores$biorepository_id)), digits = 1)
+colnames(temp_v2) <- c("BGC", "NoTimesPerSample", "NoSamples", "PercentOfSamples")
+kbl(temp_v2[which(temp_v2$NoSamples > 0 & temp_v2$NoTimesPerSample != 0),], row.names = FALSE)  %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+
+temp <- as.data.frame.matrix(table(protocores$biorepository_id, protocores$product_protoCore))
+colnames(temp) <- paste(colnames(temp), "_BGCCount", sep = "")
+metadata <- merge(metadata, temp, by.x = "biorepository_id", by.y = "row.names")
+
+rm(temp, temp_v2)
+```
+
+
+
+# Data summary
+
+```{r metasummary, echo = FALSE, results = "asis", warning = FALSE}
+table1(~location + country + final_species + ave_coverage + completeness + contamination + BGCcount| specimen_source  , data = metadata)
+```
+
+# Analysis 
+## Respiratory strains of Corynebacterium
+
+Focused analyses of the strains isolated from the respiratory tract
+
+### Summary of number of bacterial gene clusters identified per type of cluster and per respiratory strain
+
+```{r resp, echo = FALSE, results = "asis", fig.dev= "pdf", warning=F, message=F}
+metadata_resp <- metadata[which(metadata$specimen_source_cat=="Respiratory"),]
+protocores_resp <- protocores[which(protocores$specimen_source_cat=="Respiratory"),]
+write.csv(protocores_resp, file="protocores_respiratory_2025-01-27.csv", row.names = F)
+
+ddd <- as.data.frame(table(protocores_resp$product_protoCore))
+ddd %>% 
+  janitor::adorn_totals() %>%
+  kbl(caption="Number of BGCs detected per type", row.names = F) %>%
+  kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+
+
+ngs_by_class <- lapply(unique(protocores_resp$product_protoCore), function(x) {
+    length(protocores_resp$"UniqueClusterID"[which(protocores_resp$product_protoCore == x)])
+})
+ngs_by_class2 <- lapply(unique(protocores_resp$product_protoCoreFamily), function(x) {
+    length(protocores_resp$"UniqueClusterID"[which(protocores_resp$product_protoCoreFamily == x)])
+})
+names(ngs_by_class) = unique(protocores_resp$product_protoCore)
+names(ngs_by_class2) = unique(protocores_resp$product_protoCoreFamily)
+
+ngs_by_class = data.frame(rbind(
+        do.call(rbind, ngs_by_class),
+        do.call(rbind, ngs_by_class2)))
+colnames(ngs_by_class) = "NoGeneClusters"
+row.names(ngs_by_class)= gsub("_BGCCount", "", row.names(ngs_by_class))
+ngs_by_class= merge(ngs_by_class, BGC_Orders, by.x = "row.names", by.y = "Name")
+ngs_by_class$Row.names = factor(ngs_by_class$Row.names, levels = BGC_Orders$Name)
+row.names(ngs_by_class) = ngs_by_class$Row.names
+ngs_by_class = ngs_by_class[order(ngs_by_class$Order), ]
+indentset = which(ngs_by_class$level == "Child")
+
+ddd <- ngs_by_class[, c("NoGeneClusters"), drop = FALSE]
+ddd %>% 
+  #janitor::adorn_totals() %>%
+    kbl(caption = "Number of all (not necessarily unique) gene clusters identified across all respiratory specimen", row.names = T) %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria") %>%
+    add_indent(indentset) 
+
+
+
+ngs_by_class <- lapply(unique(protocores_resp$product_protoCore), function(x) {
+    length(unique(protocores_resp$"UniqueClusterID"[which(protocores_resp$product_protoCore == x)]))
+})
+ngs_by_class2 <- lapply(unique(protocores_resp$product_protoCoreFamily), function(x) {
+    length(unique(protocores_resp$"UniqueClusterID"[which(protocores_resp$product_protoCoreFamily == x)]))
+})
+names(ngs_by_class) = unique(protocores_resp$product_protoCore)
+names(ngs_by_class2) = unique(protocores_resp$product_protoCoreFamily)
+
+ngs_by_class = data.frame(rbind(
+        do.call(rbind, ngs_by_class),
+        do.call(rbind, ngs_by_class2)))
+colnames(ngs_by_class) = "NoUniqueGeneClusters"
+row.names(ngs_by_class)= gsub("_BGCCount", "", row.names(ngs_by_class))
+ngs_by_class= merge(ngs_by_class, BGC_Orders, by.x = "row.names", by.y = "Name")
+ngs_by_class$Row.names = factor(ngs_by_class$Row.names, levels = BGC_Orders$Name)
+row.names(ngs_by_class) = ngs_by_class$Row.names
+ngs_by_class = ngs_by_class[order(ngs_by_class$Order), ]
+indentset = which(ngs_by_class$level == "Child")
+
+#ngs_by_class[, c("NoUniqueGeneClusters"), drop = FALSE] %>%
+#    kbl(caption = "Number of all gene clusters identified across all respiratory specimen") %>%
+#    kable_classic(full_width = F,  position = "left", html_font = "Cambria") %>%
+#    add_indent(indentset)
+
+ddd <- ngs_by_class[, c("NoUniqueGeneClusters"), drop = FALSE]
+ ddd %>% 
+  #janitor::adorn_totals() %>%
+    kbl(caption = "Number of unique gene clusters identified across all respiratory specimen", row.names = T) %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria") %>%
+    add_indent(indentset) 
+
+table1(~  NRPS_BGCCount + NRPS_like_BGCCount +  NAPAA_BGCCount + 
+    PKS_BGCCount +  T1PKS_BGCCount + T3PKS_BGCCount + transAT_PKS_BGCCount +  
+    RiPP_BGCCount +  lanthipeptide_class_i_BGCCount + lanthipeptide_class_iv_BGCCount + lanthipeptide_class_v_BGCCount + 
+    LAP_BGCCount + lassopeptide_BGCCount + linaridin_BGCCount + DUF692_associated_bacteriocin_BGCCount + class_iid_bacteriocin_BGCCount + thiopeptide_BGCCount + 
+    Terpenes_BGCCount + Siderophores_BGCCount + 
+    betalactone_BGCCount + ectoine_BGCCount + nucleoside_BGCCount + phenazine_BGCCount | country, 
+    data = metadata_resp,
+    footnote = "Number of BCS per respiratory specimen")
+
+
+cat("<br>Wilcox rank sum test for differences in number of bcgs per specimen by country of origin (excluding references)")
+byC = lapply(grep("BGCCount", colnames(metadata_resp), value = TRUE), function(x) 
+    wilcox.test( metadata_resp[which(metadata_resp$country != "NCBI Reference"), x] ~ metadata_resp[which(metadata_resp$country != "NCBI Reference"), "country"], exact=FALSE)$p.value
+)
+
+names(byC )= grep("BGCCount", colnames(metadata_resp), value = TRUE)
+byC = data.frame(do.call(rbind, byC))
+colnames(byC) = "WilcoxPvalue"
+row.names(byC) = gsub("_BGCCount", "", row.names(byC))
+byC = merge(byC, BGC_Orders, by.x = "row.names", by.y = "Name")
+row.names(byC) = byC$Row.names
+
+byC = byC[order(byC$Order), ]
+indentset = which(byC$level == "Child")
+byC[, "WilcoxPvalue", drop = FALSE] %>%
+    kbl() %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria") %>%
+    add_indent(indentset)
+
+
+bcgCountXStrain  = melt(metadata_resp[, c( grep("BGCCount", colnames(metadata_resp), value = TRUE), "country", "biorepository_id")],
+    id.vars = c("country", "biorepository_id"))
+
+bcgCountXStrain$variable = gsub("_BGCCount", "", bcgCountXStrain$variable)
+
+bcgCountXStrain = merge(bcgCountXStrain, BGC_Orders, by.x = "variable", by.y = "Name", all.x = TRUE)
+bcgCountXStrain$variable = factor(bcgCountXStrain$variable, levels = BGC_Orders$Name)
+
+ggplot(bcgCountXStrain[which(bcgCountXStrain$Order >0),], aes(x = value,  group = country, fill = country)) +
+     geom_bar(position = "stack") + facet_wrap(~ variable, scale = "free_y") + 
+     theme_minimal() + scale_x_continuous(breaks=seq(0, 10, 2)) + 
+     ggtitle("Distribution of the number of BCGs per specimen") + xlab("Number of BCGs per specimen")
+
+
+```
+
+### Potential to encode siderophore among respiratory Corynebacterium species
+
+```{r, fig.width=5, fig.height=10, warning=F, message=F, echo=F, results='asis'}
+#dat <- protocores_resp
+dat <- metadata_resp
+#dat <- read.csv("/Users/iz12/Library/CloudStorage/Box-Box/Coryne Genomics/Results/protocores_respiratory.csv")
+
+species <- c("propinquum", "pseudodiphtheriticum", "accolens", "kefirresidentii", "marquesiae")
+
+dat$final_species2 <- ifelse(dat$final_species %in% species, dat$final_species, "Other")
+dat$final_species2 <- ifelse(dat$final_species2 == "propinquum", "C. propinquum", dat$final_species2)
+dat$final_species2 <- ifelse(dat$final_species2 == "pseudodiphtheriticum", "C. pseudodiphtheriticum", dat$final_species2)
+dat$final_species2 <- ifelse(dat$final_species2 == "accolens", "C. accolens", dat$final_species2)
+dat$final_species2 <- ifelse(dat$final_species2 == "kefirresidentii", "C. kefirresidentii", dat$final_species2)
+dat$final_species2 <- ifelse(dat$final_species2 == "tuberculostearicum", "C. tuberculostearicum", dat$final_species2)
+dat$final_species2 <- ifelse(dat$final_species2 == "marquesiae", "C. marquesiae", dat$final_species2)
+dat$final_species2 <- factor(dat$final_species2, levels=c("C. accolens", "C. kefirresidentii","C. marquesiae","C. propinquum", "C. pseudodiphtheriticum", "Other"))
+dat$siderophore_cluster <- ifelse(dat$Siderophores_BGCCount != 0, "Siderophore", "Other")
+dat$other_cluster <- ifelse( (dat$BGCcount - dat$Siderophores_BGCCount) != 0, 1, 0)
+
+ans <- dat %>% group_by(Species=final_species2, siderophore_cluster) %>% dplyr::summarise(n=n())
+#ans <- melt(ans)
+
+kbl(ans)  %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+```
+
+```{r, fig.width=5, fig.height=7, warning=F, message=F, echo=F, results='asis'}
+# BW
+p <- ggplot(data=ans, aes(x=Species, y=n, fill=siderophore_cluster)) + geom_bar(stat="identity", position=position_stack()) + theme_bw() 
+p <- p + ylab("# of strains encoding siderophore BGCs") + xlab("Species")
+p <- p + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, face = "italic", size = 12), 
+               panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position=c(0,1), , legend.justification='left', legend.direction = "horizontal")
+p <- p + scale_fill_manual(name="", values = c("Siderophore" = "black", "Other" = "lightgray"), labels = c("Absence", "Presense"))
+p
+
+setEPS()
+postscript("manuscript/Figures/Figure4b_v2_bw.eps", width = 5, height = 7)
+p
+dev.off()
+
+
+# Colors
+p <- ggplot(data=ans, aes(x=Species, y=n, fill=siderophore_cluster)) + geom_bar(stat="identity", position=position_stack()) + theme_bw() 
+p <- p + ylab("# of strains encoding siderophore BGCs") + xlab("Species")
+p <- p + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, face = "italic", size = 12), 
+               panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position=c(0,1), , legend.justification='left', legend.direction = "horizontal")
+p <- p + scale_fill_manual(name="", values = c("Siderophore" = "lightgoldenrod", "Other" = "lightblue"), labels = c("Absence", "Presense"))
+p
+
+setEPS()
+postscript("manuscript/Figures/Figure4b_v2_colors.eps", width = 5, height = 7)
+p
+dev.off()
+
+#
+```
+
+
+
+
+
+
+
+```{r resp_summary_figure, echo = FALSE, results = "asis", fig.width = 10, fig.dev= "pdf", warning=F, message=F}
+# Generate a figure summarizing the mean number of BGCs by Corynebacterium species
+# Note that there are no gene clusters for betalactones in respiratory strains
+
+bgc_fig1 <-  metadata_resp
+
+bgc_fig1$species_fig <- bgc_fig1$final_species
+bgc_fig1$species_fig[bgc_fig1$species=="accolens"] <- "C. accolens"
+bgc_fig1$species_fig[bgc_fig1$species=="kefirresidentii"] <- "C. kefirresidentii"
+bgc_fig1$species_fig[bgc_fig1$species=="propinquum"] <- "C. propinquum"
+bgc_fig1$species_fig[bgc_fig1$species=="pseudodiphtheriticum"] <- "C. pseudodiphtheriticum"
+#bgc_fig1$species_fig[bgc_fig1$species=="tuberculostearicum"] <- "C. tuberculostearicum"
+bgc_fig1$species_fig[bgc_fig1$species=="marquesiae"] <- "C. marquesiae"
+
+bgc_fig1$species_fig[bgc_fig1$species=="unknown"] <- "Other Corynebacterium sp."
+
+bgc_fig1$species_fig[bgc_fig1$species=="amycolatum" | bgc_fig1$species=="appendicis" | bgc_fig1$species=="aurimucosum" | bgc_fig1$species=="bovis" | 
+                       bgc_fig1$species=="coyleae" | bgc_fig1$species=="freneyi" | bgc_fig1$species=="striatum" | bgc_fig1$species=="yonathiae" |
+                       bgc_fig1$species=="mastitidis" | bgc_fig1$species=="tuberculostearicum"] <- "Other Corynebacterium sp."
+
+bcgCountXStrain  = melt(bgc_fig1[, c( grep("BGCCount", colnames(bgc_fig1), value = TRUE),  "biorepository_id", "species_fig")],
+    id.vars = c("species_fig", "biorepository_id"))
+
+bcgCountXStrain$variable = gsub("_BGCCount", "", bcgCountXStrain$variable)
+bcgCountXStrain = merge(bcgCountXStrain, BGC_Orders, by.x = "variable", by.y = "Name", all.x = TRUE)
+bcgCountXStrain$variable = factor(bcgCountXStrain$variable, levels = BGC_Orders$Name)
+
+ggplot(bcgCountXStrain[which(bcgCountXStrain$Order >0),], aes(x = value,  group = species_fig, fill = species_fig)) +
+     geom_bar(position = "stack") + facet_wrap(~ variable, scale = "free_y") + 
+     theme_minimal() + scale_x_continuous(breaks=seq(0, 10, 2)) + 
+     ggtitle("Distribution of the number of BCGs per specmien") + xlab("Number of BCGs per specimen")
+
+tmp <- bgc_fig1
+bgc_fig1 <- aggregate(bgc_fig1[,grep("BGCCount", colnames(bgc_fig1), value = TRUE),], list(bgc_fig1$species_fig, bgc_fig1$country), mean)
+bgc_fig1 <- gather(bgc_fig1, num, mean,c("NAPAAs_BGCCount", Other_BGCCount:Terpenes_BGCCount, "NRPS_BGCCount", "NRPS_like_BGCCount"), factor_key = TRUE)
+#bgc_fig1 <- gather(bgc_fig1, num, mean,NAPAAs_BGCCount:transAT_PKS_BGCCount, factor_key = TRUE)
+names(bgc_fig1)[names(bgc_fig1) == "Group.1"] <- "species_fig"
+names(bgc_fig1)[names(bgc_fig1) == "Group.2"] <- "country"
+
+
+colors_11 <- c("grey60","chartreuse", "dodgerblue1", "black", "yellow", "#6A3D9A", "green4", "#CAB2D6", "blue1", "#ff8c00", "brown", "#E31A1C")
+
+bgc_fig1$num = gsub("_BGCCount", "", bgc_fig1$num )
+bgc_fig1$num[which(bgc_fig1$num == "NAPAAs")] <- "NAPAA"
+bgc_fig1$num[which(bgc_fig1$num == "NRPS_like")] <- "NRPS-like"
+bgc_fig1$num[which(bgc_fig1$num == "Siderophores")] <- "Siderophore"
+bgc_fig1$num[which(bgc_fig1$num == "Terpenes")] <- "Terpene"
+
+#bgc_fig1$num<-factor(bgc_fig1$num, levels = c("NAPAA", "NRPS", "NRPS-like", "Nucleoside", "Phenazine", "PKS", "RiPP", "Siderophore", "Terpene", "Other"))
+bgc_fig1$num<-factor(bgc_fig1$num)
+
+                                
+bgc_fig1$species_fig <- factor(bgc_fig1$species_fig, levels = c("C. accolens", "C. kefirresidentii", "C. marquesiae", "C. propinquum", 
+                                                                "C. pseudodiphtheriticum", "Other Corynebacterium sp."))
+
+tmp_table <- as.data.frame.matrix(addmargins(table(metadata_resp$final_species, metadata_resp$country)))
+tmp_table <- tmp_table[order(tmp_table$Sum, decreasing = T),]
+tmp_table %>%
+    kbl() %>%
+    kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+```
+
+
+
+```{r, fig.width=16, fig.height=6, warning=F, message=F, echo=F}
+bgc_fig1_2 <- tmp
+#bgc_fig1_2 <- aggregate(bgc_fig1_2[,grep("BGCCount", colnames(bgc_fig1_2), value = TRUE),], list(bgc_fig1_2$species_fig, bgc_fig1_2$country, bgc_fig1_2$biorepository_id), sum)
+#bgc_fig1_2 <- gather(bgc_fig1_2, num, sum, c(Ectoine_BGCCount:Terpenes_BGCCount, "NRPS_BGCCount", "NRPS_like_BGCCount"), factor_key = TRUE)
+bgc_fig1_2 <- aggregate(bgc_fig1_2[,grep("BGCCount", colnames(bgc_fig1_2), value = TRUE),], list(bgc_fig1_2$species_fig), mean)
+bgc_fig1_2 <- gather(bgc_fig1_2, num, mean,c("NAPAAs_BGCCount", Other_BGCCount:Terpenes_BGCCount, "NRPS_BGCCount", "NRPS_like_BGCCount"), factor_key = TRUE)
+#bgc_fig1 <- gather(bgc_fig1, num, mean,NAPAAs_BGCCount:transAT_PKS_BGCCount, factor_key = TRUE)
+names(bgc_fig1_2)[names(bgc_fig1_2) == "Group.1"] <- "species_fig"
+#names(bgc_fig1_2)[names(bgc_fig1_2) == "Group.2"] <- "country"
+
+
+bgc_fig1_2$num = gsub("_BGCCount", "", bgc_fig1_2$num )
+bgc_fig1_2$num[which(bgc_fig1_2$num == "NAPAAs")] <- "NAPAA"
+#bgc_fig1_2$num[which(bgc_fig1_2$num == "NRPSandNRPSlike" | bgc_fig1_2$num == "NRPS_like")] <- "NRPS/NRPS-like"
+bgc_fig1_2$num[which(bgc_fig1_2$num == "NRPS_like")] <- "NRPS-like"
+bgc_fig1_2$num[which(bgc_fig1_2$num == "Siderophores")] <- "Siderophore"
+bgc_fig1_2$num[which(bgc_fig1_2$num == "Terpenes")] <- "Terpene"
+
+#bgc_fig1_2$num<-factor(bgc_fig1_2$num, levels = c("Ectoine" , "NAPAA", "NRPS", "NRPS-like", "Nucleoside", "Phenazine", "PKS", "RiPP", "Siderophore", "Terpene", "Other"))
+#bgc_fig1_2$num<-factor(bgc_fig1_2$num, levels = c("NAPAA", "NRPS", "NRPS-like", "Nucleoside", "Phenazine", "PKS", "RiPP", "Siderophore", "Terpene", "Other"))
+bgc_fig1_2$num<-factor(bgc_fig1_2$num)
+
+                                
+#bgc_fig1_2$species_fig <- factor(bgc_fig1_2$species_fig, levels = c("C. accolens", "C. kefirresidentii", "C. marquesiae", "C. propinquum", 
+#                                                                "C. pseudodiphtheriticum", "C. tuberculostearicum", "Other Corynebacterium sp."))
+bgc_fig1_2$species_fig <- factor(bgc_fig1_2$species_fig, levels = c("C. accolens", "C. kefirresidentii", "C. marquesiae", "C. propinquum", 
+                                                                "C. pseudodiphtheriticum", "Other Corynebacterium sp."))
+
+
+colors_7 <- c("yellow", "#6A3D9A", "green4", "blue1", "#ff8c00", "brown", "#E31A1C")
+colors_8 <-  c("yellow", "#6A3D9A", "green4", "#CAB2D6", "blue1", "#ff8c00", "brown", "#E31A1C")
+colors_12 <- c("grey60","chartreuse", "dodgerblue1", "black", "yellow", "#6A3D9A", "green4", "#CAB2D6", "blue1", "#ff8c00", "brown", "#E31A1C")
+pmap <- read.xlsx("/Users/iz12/Projects/corynegenomics/BGC/protocore_Family.xlsx", sheet = 2)
+
+
+bgc_fig1_2 <- merge(bgc_fig1_2, pmap, by.x="num", by.y="product_protoCoreFamily", all.x=T, all.y=F)
+
+p1 <- ggplot(bgc_fig1_2, aes(fill=num, y=species_fig, x=mean)) + geom_bar(position="stack", stat="identity") + 
+  geom_col(position = position_stack(reverse = TRUE)) +
+  xlim(c(0, 6)) + 
+  theme(legend.text=element_text(size=16), legend.title=element_text(size=18), #, legend.position = "none",
+        axis.title.y = element_text(angle=90, size=18), 
+        axis.text.y = element_text(size=16, colour="black", face=rep("italic", length(levels(bgc_fig1$species_fig)))), 
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_text(size=18), 
+        axis.text.x = element_text(size=16, colour="black"), plot.title = element_text(size=17, hjust=1.4), 
+        strip.text.x = element_text(size = 16), strip.background=element_rect(fill="white"), panel.background = element_blank(),
+        plot.tag = element_text(size=20)) + 
+  scale_fill_manual(breaks = bgc_fig1_2$num, values=bgc_fig1_2$product_protoCoreFamilyColor, na.translate = F) + 
+  scale_y_discrete(limits=rev) + xlab("Mean number of BGCs") + ylab("") +
+  guides(fill = guide_legend(ncol=1, byrow=TRUE, title="")) + labs(tag = "A")
+
+
+
+
+bgc_fig1_2 <- tmp
+bgc_fig1_2 <- aggregate(bgc_fig1_2[,grep("BGCCount", colnames(bgc_fig1_2), value = TRUE),], list(bgc_fig1_2$species_fig, bgc_fig1_2$strain_id), sum)
+bgc_fig1_2 <- gather(bgc_fig1_2, num, sum,c("NAPAAs_BGCCount", Other_BGCCount:Terpenes_BGCCount, "NRPS_BGCCount", "NRPS_like_BGCCount"), factor_key = TRUE)
+names(bgc_fig1_2)[names(bgc_fig1_2) == "Group.1"] <- "species_fig"
+
+bgc_fig1_2$num = gsub("_BGCCount", "", bgc_fig1_2$num )
+bgc_fig1_2$num[which(bgc_fig1_2$num == "NAPAAs")] <- "NAPAA"
+#bgc_fig1_2$num[which(bgc_fig1_2$num == "NRPSandNRPSlike" | bgc_fig1_2$num == "NRPS_like")] <- "NRPS/NRPS-like"
+bgc_fig1_2$num[which(bgc_fig1_2$num == "NRPS_like")] <- "NRPS-like"
+bgc_fig1_2$num[which(bgc_fig1_2$num == "Siderophores")] <- "Siderophore"
+bgc_fig1_2$num[which(bgc_fig1_2$num == "Terpenes")] <- "Terpene"
+bgc_fig1_2$num<-factor(bgc_fig1_2$num)
+#bgc_fig1_2$species_fig <- factor(bgc_fig1_2$species_fig, levels = c("C. accolens", "C. kefirresidentii", "C. marquesiae", "C. propinquum", 
+#                                                                "C. pseudodiphtheriticum", "C. tuberculostearicum", "Other Corynebacterium sp."))
+bgc_fig1_2$species_fig <- factor(bgc_fig1_2$species_fig, levels = c("C. accolens", "C. kefirresidentii", "C. marquesiae", "C. propinquum", 
+                                                                "C. pseudodiphtheriticum",  "Other Corynebacterium sp."))
+#bgc_fig1_2$num<-factor(bgc_fig1_2$num, levels = c("NAPAA", "NRPS", "NRPS-like", "Nucleoside", "Phenazine", "PKS", "RiPP", "Siderophore", "Terpene", "Other"))
+bgc_fig1_2$num<-factor(bgc_fig1_2$num)
+
+
+bgc_fig1_2 <- merge(bgc_fig1_2, pmap, by.x="num", by.y="product_protoCoreFamily", all.x=T, all.y=F)
+
+
+p2 <- ggplot(bgc_fig1_2, aes(y=sum, x=num, fill=num)) + geom_boxplot(alpha = 0.9, outlier.shape = NA) +
+  facet_grid(species_fig~., switch = "y") + theme_bw() +
+  geom_point(position = position_jitter(seed = 0, width = 0.05 ), size = 0) +
+  theme(legend.text=element_text(size=14), legend.title=element_text(size=14), 
+        axis.title.y = element_text(angle=90, size=12, vjust=1), 
+        strip.text = element_text(face = "italic", size=12),
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_text(size=10), 
+        axis.text.x = element_text(size=14, colour="black", angle = 45, vjust = 1, hjust=1), 
+        strip.text.x = element_text(size = 12), strip.background=element_rect(fill="white"), panel.background = element_blank(), 
+        plot.tag = element_text(size=20), 
+        panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) + 
+  scale_fill_manual(breaks = bgc_fig1_2$num, values=bgc_fig1_2$product_protoCoreFamilyColor, na.translate = F) +
+  scale_y_continuous(position = "right", limits = c(0, 4), oob = scales::squish) + 
+  theme(strip.text.y.left = element_text(angle = 0, size=16, hjust=1), strip.background=element_blank()) +
+  ylab("Number of BGCs") + xlab("") +
+  guides(fill = guide_legend(ncol=1, byrow=TRUE, title="", override.aes = list(shape = NA))) + expand_limits(x = c(0, 3.2), y = c(0, 3.2)) + labs(tag = "B")
+
+#multiplot(p1, p2, cols=2)
+p1 + p2
+```
+
+
+
+
+```{r resp_summary_figure_part2, echo = FALSE, results = "asis", fig.dev= "pdf", fig.width = 12, eval = TRUE, warning=F, message=F}
+bgc_fig1 <- merge(bgc_fig1, pmap, by.x="num", by.y="product_protoCoreFamily", all.x=T, all.y=F)
+
+ggplot(bgc_fig1, aes(fill=num, y=species_fig, x=mean)) + geom_bar(position="stack", stat="identity") + 
+  geom_col(position = position_stack(reverse = TRUE)) +
+    xlim(c(0, 6)) + 
+  theme(legend.text=element_text(size=16), legend.title=element_text(size=18), 
+        axis.title.y = element_text(angle=90, size=18), 
+        axis.text.y = element_text(size=16, colour="black", face=c("italic","italic","italic","italic","italic","italic")), 
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_text(size=18), 
+        axis.text.x = element_text(size=16, colour="black"), plot.title = element_text(size=17, hjust=1.4), 
+        strip.text.x = element_text(size = 16), strip.background=element_rect(fill="white"), panel.background = element_blank()) + 
+  scale_fill_manual(breaks = bgc_fig1$num, values=bgc_fig1$product_protoCoreFamilyColor, na.translate = F) +
+    scale_y_discrete(limits=rev) + xlab("Mean number of BGCs") + ylab("") +
+  guides(fill = guide_legend(ncol=1, byrow=TRUE, title="")) + facet_wrap("country")
+
+
+```
+
+
+### Fasta outputs
+
+Output unique sequences found in the respiratory samples analysed above
+
+Order sequences alphabetically by species
+
+two versions of each file - with and without clusters that overlap a contig edge
+```{r fastaN, echo = FALSE, results = 'asis'}
+sfilter = which(  uniqueSeqs$UniqueClusterID %in% protocores_resp$UniqueClusterID )
+
+ddd <- as.data.frame(table(uniqueSeqs$product_protoCore))
+ddd %>% 
+  janitor::adorn_totals() %>%
+  kbl(caption="All", row.names = F) %>%
+  kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+ddd <- as.data.frame(table(uniqueSeqs$product_protoCore[sfilter]))
+ddd %>% 
+  janitor::adorn_totals() %>%
+  kbl(caption="Respiratory", row.names = F) %>%
+  kable_classic(full_width = F,  position = "left", html_font = "Cambria")
+
+```
+
+
+```{r writefasta, echo = FALSE, eval = FALSE, results = 'asis', eval  = TRUE}
+# confrimed that all unique sequences are specific to a speices, no two species share a unique sequence. 
+# table(rowSums(table(protocores$UniqueClusterID, protocores$final_species)>0))
+
+
+writeFasta <- function(data, filename, nameCol, seqCol){
+  fastaLines = c()
+  for (rowNum in 1:nrow(data)){
+    fastaLines = c(fastaLines, as.character(paste(">", data[rowNum,nameCol], sep = "")))
+    fastaLines = c(fastaLines,as.character(data[rowNum,seqCol]))}
+  fileConn<-file(filename)
+  writeLines(fastaLines, fileConn)
+  close(fileConn)}
+
+set.seed(1234)
+# use sequences found in respiratory samples only.
+
+# uniqueSeqs$SeqID = paste("C. ", uniqueSeqs$final_species," (", gsub("^.*_", "", uniqueSeqs$strain_id),")",  sep = "")
+
+uniqueSeqs$SeqID <- paste(gsub("_", " (", gsub("C_", "C. ", uniqueSeqs$deposit_id)), ")", sep = "")
+# if a species is unknown, will be dispayed as "Corynebacterium (XXXXX)"
+uniqueSeqs$SeqID<- gsub("Corynebacterium \\(", "Corynebacterium spp. \\(", uniqueSeqs$SeqID )
+
+# within each BGC call, ensure that the SeqIDs are unique, if not, add a suffix
+
+for (pc in unique(uniqueSeqs$product_protoCore)) {
+    sfilter <- which(uniqueSeqs$product_protoCore == pc )
+    dupIDs <-uniqueSeqs$SeqID[sfilter][duplicated(uniqueSeqs$SeqID[sfilter])] 
+    if(length(dupIDs) >0) {
+        for(id in dupIDs) {
+            idfilter <- which(uniqueSeqs$product_protoCore == pc & 
+                                uniqueSeqs$SeqID == id )
+            idsuffix = paste("[", letters[seq(from = 1, to = length(idfilter))], "])", sep = "")
+            uniqueSeqs$SeqID[idfilter]<-paste(gsub("\\)", "", uniqueSeqs$SeqID[idfilter]), idsuffix, sep = "")
+        }
+    }
+
+}
+
+ write.csv(uniqueSeqs[ which( uniqueSeqs$UniqueClusterID %in% protocores_resp$UniqueClusterID ),], 
+    "../../Data/BGC/MultipleAlignments/UniqueSequences.csv")
+
+
+for (pc in unique(uniqueSeqs$product_protoCore)) {
+    fh = paste("../../Data/BGC/MultipleAlignments/respir_", pc, ".fasta", sep = "")
+    sfilter = which(uniqueSeqs$product_protoCore == pc &  
+                    uniqueSeqs$UniqueClusterID %in% protocores_resp$UniqueClusterID )
+    if(length(sfilter) > 1) { 
+        temp = uniqueSeqs[sfilter, ]
+        temp = temp[order(temp$final_species),]
+        temp = temp[, c("SeqID", "translation")]
+        if(pc == "class_iid_bacteriocin") {
+            temp = rbind(temp, c("AAF64054.1 lactococcin 972", 
+                "MKTKSLVLALSAVTLFSAGGIVAQAEGTWQHGYGVSSAYSNYHHGSKTHSATVVNNNTGRQGKDTQRAGVWAKATVGRNLTEKASFYYNFW")
+            )
+        }
+        writeFasta(temp, fh, "SeqID", "translation")
+        cat(paste( pc, "with", length(sfilter), "unique sequences in", fh, "<br>"))
+
+    }
+}
+
+for (pc in unique(uniqueSeqs$product_protoCore)) {
+    fh = paste("../../Data/BGC/MultipleAlignments/respir_", pc, "no_CEs.fasta", sep = "")
+    sfilter = which(uniqueSeqs$product_protoCore == pc & 
+                    uniqueSeqs$UniqueClusterID %in% protocores_resp$UniqueClusterID & 
+                    uniqueSeqs$contig_edg == "False")
+    if(length(sfilter) > 1) { 
+        temp = uniqueSeqs[sfilter, ]
+        temp = temp[order(temp$final_species),]
+        temp = temp[, c("SeqID", "translation")]
+        if(pc == "class_iid_bacteriocin") {
+            temp = rbind(temp, c("AAF64054.1 lactococcin 972", 
+                "MKTKSLVLALSAVTLFSAGGIVAQAEGTWQHGYGVSSAYSNYHHGSKTHSATVVNNNTGRQGKDTQRAGVWAKATVGRNLTEKASFYYNFW")
+            )
+        }
+        writeFasta(temp, fh, "SeqID", "translation")
+        cat(paste( pc, "with", length(sfilter), "unique sequences in", fh, "<br>"))
+    }
+}
+
+
+```

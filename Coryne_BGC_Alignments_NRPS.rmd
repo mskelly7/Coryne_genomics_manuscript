@@ -1,0 +1,259 @@
+---
+title: Coryne BGC Alignments 
+author: Rachel Myers
+date: November 2022
+output: 
+    html_document:
+        toc: true
+        self.contained: true
+---
+
+# Coryne genomes analysis
+# Preliminaries
+
+## Credits
+Author: Rachel Myers
+
+Investigator: Dr. Matthew Kelly
+
+Date: `r Sys.Date()`
+
+## Recreating this report
+
+1. Ensure that the R packages rmarkdown, knitr, and those listed below are installed
+
+2. Ensure that the file Coryne_BGC_Alignments.rmd is in your working directory in R, change your R's working directory if needed 
+
+3. Copy and paste the below code chunk into R, updating the path for the BGC fastq files
+
+```{r recreate, echo = TRUE, eval = FALSE,  results = "asis"}
+
+rm(list= ls(all= TRUE))
+require("rmarkdown")
+require("knitr")
+setwd("Code/antismash")
+fastadir = "Data/BGC/MultipleAlignments/"
+render("Coryne_BGC_Alignments_NRPS.rmd", c("html_document"))
+
+```
+
+Random seed is sepcified for reporducibility of mulitple alignments 
+
+
+```{r loadpackages, echo = F, warnings = F, error = F, message = F}
+require(muscle)
+require(ggmsa)
+require(msa)
+require(seqinr)
+require(ggtree)
+set.seed(1234)
+
+```
+
+## Load protocore info 
+```{r loadPCInfo, echo = FALSE, results = "asis"}
+pcinfo <- read.csv("../../Data/BGC/MultipleAlignments/UniqueSequences.csv")
+
+```
+
+## Fastq file processing
+
+* List all fasta files found in the fasta firectory noted above 
+
+* For each file, generate a MUSCLE alignment 
+
+## Fastq file processing
+
+* List all fasta files found in the fasta firectory noted above 
+
+* For each file, generate a MUSCLE alignment 
+
+```{r listfasta, echo = FALSE, results = "asis", message = FALSE, warning = FALSE}
+# listfasta
+
+fastafh = list.files(fastadir, pattern = "fasta", full.names = TRUE )
+# reduce to the bacteriocin and RiPPS
+
+fastafh = fastafh[grepl("NRPS", fastafh)]
+
+
+fastadata = lapply(fastafh, readAAStringSet )
+names(fastadata) = gsub("respir_", "", gsub(".fasta", "", basename(fastafh)))
+
+#alnmts = lapply(fastadata, function(x) msa(x, method = "Muscle", type = "protein", verbose = FALSE) )
+#names(alnmts) = gsub("respir_", "", gsub(".fasta", "", basename(fastafh)))
+
+alnmts = lapply(fastadata, function(x) muscle(x, quiet = TRUE) )
+names(alnmts) = gsub("respir_", "", gsub(".fasta", "", basename(fastafh)))
+
+```
+
+# NRPS BGC proto_gene sequence alignments
+
+## NRPS - All
+
+Unique sequences from all NRPS clusters 
+
+```{r poc_1a, echo = FALSE, results = "asis",fig.width = 20, fig.height =6,warning = FALSE, message = FALSE }
+
+aln <- alnmts[["NRPS"]]
+aln1 <- msaConvert(aln, "seqinr::alignment")
+writeXStringSet(as(aln, "AAStringSet"), file="aln.fasta")
+```
+```{r poc_2, echo = FALSE, results = "asis",fig.width = 15, fig.height =8 }
+
+# visulaize the dendogram
+cat("<br>Tree using hamming string distances based on the protein sequences<br>")
+sdist <- stringDist(as(aln,"AAStringSet"), method="hamming")
+clust <- hclust(sdist, method = "single")
+plot(clust)
+```
+
+```{r poc_6, echo = FALSE, results = "asis", echo = FALSE, fig.width = 10, fig.height =20,warning = FALSE, message = FALSE}
+
+cat("<br>Tree using Fitch similarity for amino acid sequences")
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d)
+#https://4va.github.io/biodatasci/r-ggtree.html
+msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =1.1, width = 4) + geom_tiplab( hjust = -0.1)
+```
+
+
+## NRPS - non Contig Edges
+
+Unique sequences from NRPS clusters that do not overlap contig edges
+
+```{r nrps_nce_1a, echo = FALSE, results = "asis",fig.width = 20, fig.height =6,warning = FALSE, message = FALSE }
+
+aln <- alnmts[["NRPSno_CEs"]]
+aln1 <- msaConvert(aln, "seqinr::alignment")
+writeXStringSet(as(aln, "AAStringSet"), file="aln.fasta")
+```
+```{r nrps_nce_2, echo = FALSE, results = "asis",fig.width = 10, fig.height =8 }
+
+# visulaize the dendogram
+cat("<br>Tree using hamming string distances based on the protein sequences<br>")
+sdist <- stringDist(as(aln,"AAStringSet"), method="hamming")
+clust <- hclust(sdist, method = "single")
+plot(clust)
+```
+
+```{r nrps_nce_6, echo = FALSE, results = "asis", echo = FALSE, fig.width = 10, fig.height =10,warning = FALSE, message = FALSE}
+
+cat("<br>Tree using Fitch similarity for amino acid sequences")
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d)
+#https://4va.github.io/biodatasci/r-ggtree.html
+msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =1.1, width = 4) + geom_tiplab( hjust = -0.1)
+```
+
+
+
+## Down-selection within clades that have high similarity 
+Using the tree based on Fitch similarity for amino acid sequences
+
+
+```{r ds_setup, echo = FALSE, results = "asis", fig.width = 8, fig.height = 8}
+cutheight = 0.20
+
+dendr <- dendro_data(tr, type="rectangle") 
+ggplot() + 
+  geom_segment(data=segment(dendr), aes(x=x, y=y, xend=xend, yend=yend)) + 
+  geom_text(data=dendr$labels, aes(x=x, y=y, label=label, hjust=-0.01), size=2.5) +
+  coord_flip() + scale_y_reverse(expand=c(0.4, 0)) + 
+  theme_dendro() + geom_hline(yintercept = cutheight, color = "red")
+
+cat("<br>Cut the tree at height =", cutheight, "<br>")
+
+ct = cutree(tr, h = cutheight)
+kable(table(ct))
+```
+
+
+## Alignment and tree using down-selected sequences
+```{r ds_stage1, echo = FALSE, results = "asis", fig.width = 10, fig.height = 3}
+subsample <- data.frame(groupID = unique(ct),
+                        nSequences = as.vector(table(ct)),
+                        Sequences = sapply(unique(ct), function(x) paste( names(ct)[which(ct == x)], collapse = ";")),
+                        SelectedID = sapply(unique(ct), function(x) sample( names(ct)[which(ct == x)], 1)),
+                        stringsAsFactors = FALSE)
+                        
+fastatemp <-fastadata[["NRPSno_CEs"]]
+
+fastatemp <- fastatemp[which(names(fastatemp) %in% subsample$SelectedID), ]
+
+
+
+temp_aln <- muscle(fastatemp , quiet = TRUE)
+temp_aln1 <- msaConvert(temp_aln, "seqinr::alignment")
+writeXStringSet(as(temp_aln, "AAStringSet"), file="aln.fasta")
+
+
+cat("<br>Tree using Fitch similarity for amino acid sequences")
+d <- dist.alignment(temp_aln1, "similarity")
+tr <- hclust(d)
+#https://4va.github.io/biodatasci/r-ggtree.html
+msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =1.1, width = 4) + geom_tiplab( hjust = -0.1)
+
+NRPS_downselection <- data.frame(ct)
+NRPS_downselection$Selected<- ifelse(row.names(NRPS_downselection) %in% subsample$SelectedID, "Yes", "No")
+
+NRPS_downselection <- merge(NRPS_downselection, pcinfo, by.x = "row.names", by.y = "SeqID", all.x = TRUE)
+
+outfh = "../../Data/BGC/MultipleAlignments/NRPS_list.csv"
+write.csv(NRPS_downselection, outfh, row.names = FALSE)
+
+cat("<br>NRPS down selection results saved to:", outfh)
+```
+
+
+
+## NRPS like - All
+Unique sequences from all NRPS clusters 
+
+```{r NRPS_like_1a, echo = FALSE, results = "asis",fig.width = 4, fig.height =6,warning = FALSE, message = FALSE }
+
+aln <- alnmts[["NRPS_like"]]
+aln1 <- msaConvert(aln, "seqinr::alignment")
+writeXStringSet(as(aln, "AAStringSet"), file="aln.fasta")
+```
+
+
+```{r NRPS_like_6, echo = FALSE, results = "asis", echo = FALSE, fig.width = 10, fig.height =4,warning = FALSE, message = FALSE}
+
+cat("<br>Tree using Fitch similarity for amino acid sequences")
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d)
+#https://4va.github.io/biodatasci/r-ggtree.html
+msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =.9, width = 4) + geom_tiplab( hjust = -0.1)
+```
+
+
+
+
+## NRPS like - non Contig Edges
+Unique sequences from NRPS clusters that do not overlap contig edges
+
+```{r NRPS_nce_like_1a, echo = FALSE, results = "asis", warning = FALSE, message = FALSE }
+
+aln <- alnmts[["NRPS_likeno_CEs"]]
+aln1 <- msaConvert(aln, "seqinr::alignment")
+writeXStringSet(as(aln, "AAStringSet"), file="aln.fasta")
+```
+
+```{r NRPS_nce_like_6, echo = FALSE, results = "asis", echo = FALSE, fig.width = 10, fig.height =4,warning = FALSE, message = FALSE}
+
+cat("<br>Tree using Fitch similarity for amino acid sequences")
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d)
+#https://4va.github.io/biodatasci/r-ggtree.html
+msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =.9, width = 4) + geom_tiplab( hjust = -0.1)
+```
+
+
+# Session info
+```{r sessionInfo}
+
+sessionInfo()
+
+```

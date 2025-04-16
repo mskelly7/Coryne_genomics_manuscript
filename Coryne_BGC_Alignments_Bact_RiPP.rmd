@@ -1,0 +1,352 @@
+---
+title: Coryne BGC Alignments - Bacteriocins and RiPPs
+author: Rachel Myers
+date: November 2022
+output: 
+    html_document:
+        toc: true
+        self.contained: true
+---
+
+# Coryne genomes analysis
+# Preliminaries
+
+## Credits
+Author: Rachel Myers
+
+Investigator: Dr. Matthew Kelly
+
+Date: `r Sys.Date()`
+
+## Recreating this report
+
+1. Ensure that the R packages rmarkdown, knitr, and those listed below are installed
+
+2. Ensure that the file Coryne_BGC_Alignments.rmd is in your working directory in R, change your R's working directory if needed 
+
+3. Copy and paste the below code chunk into R, updating the path for the BGC fastq files
+
+```{r recreate, echo = TRUE, eval = FALSE,  results = "asis"}
+
+rm(list= ls(all= TRUE))
+require("rmarkdown")
+require("knitr")
+setwd("Code/antismash/")
+fastadir <- "Data/BGC/MultipleAlignments/"
+render("Coryne_BGC_Alignments_Bact_RiPP.rmd", c("html_document"))
+
+```
+
+Random seed is sepcified for reporducibility of mulitple alignments 
+
+
+```{r loadpackages, echo = F, warnings = F, error = F, message = F}
+require(muscle)
+require(ggmsa)
+require(msa)
+require(seqinr)
+require(ggtree)
+require(ggdendro)
+require(ggplot2)
+set.seed(1234)
+```
+
+## Fastq file processing
+
+* List all fasta files found in the fasta firectory noted above 
+
+* For each file, generate a MUSCLE alignment 
+
+```{r listfasta, echo = FALSE, results = "asis", message = FALSE, warning = FALSE}
+# listfasta
+
+fastafh = list.files(fastadir, pattern = "fasta", full.names = TRUE )
+# reduce to the bacteriocin and RiPPS
+
+fastafh = fastafh[grepl("(class_iid_bacteriocin)|(lanthipeptide)|(LAP)|(lassopeptide)|(linaridin)|(thiopeptide)", fastafh)]
+
+
+fastadata = lapply(fastafh, readAAStringSet )
+names(fastadata) = gsub("respir_", "", gsub(".fasta", "", basename(fastafh)))
+
+alnmts = lapply(fastadata, function(x) msa(x, method = "Muscle", type = "protein", verbose = FALSE) )
+names(alnmts) = gsub("respir_", "", gsub(".fasta", "", basename(fastafh)))
+
+```
+
+# RRiP BGC proto_gene sequence alignments
+
+## Class iid bacteriocin - All 
+
+```{r poc_1a, echo = FALSE, results = "asis",fig.width = 20, fig.height =6,warning = FALSE, message = FALSE }
+
+aln <- alnmts[["class_iid_bacteriocin"]]
+aln1 <- msaConvert(aln, "seqinr::alignment")
+writeXStringSet(as(aln, "AAStringSet"), file="aln.fasta")
+```
+```{r poc_2, echo = FALSE, results = "asis",fig.width = 8, fig.height =3}
+
+# visulaize the dendogram
+cat("<br>Tree using hamming string distances based on the aligned protein sequences<br>")
+sdist <- stringDist(as(aln,"AAStringSet"), method="hamming")
+clust <- hclust(sdist, method = "single")
+# plot(clust)
+# code from here: https://stackoverflow.com/questions/14118033/horizontal-dendrogram-in-r-with-labels
+# convert cluster object to use with ggplot
+dendr <- dendro_data(clust, type="rectangle") 
+ggplot() + 
+  geom_segment(data=segment(dendr), aes(x=x, y=y, xend=xend, yend=yend)) + 
+  geom_text(data=dendr$labels, aes(x=x, y=y, label=label, hjust=-0.01), size=2.5) +
+  coord_flip() + scale_y_reverse(expand=c(0.4, 0)) + 
+  theme_dendro()
+```
+
+```{r poc_6, echo = FALSE, results = "asis", echo = FALSE, fig.width = 20, fig.height =6,warning = FALSE, message = FALSE}
+
+cat("<br>Tree using Fitch similarity for amino acid sequences")
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d)
+#https://4va.github.io/biodatasci/r-ggtree.html
+msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =.55, width = 4) + geom_tiplab( hjust = -0.1, size = 6)
+```
+
+
+## Class iid bacteriocin - non Contig Edges 
+
+```{r c2dsb_nce_1a, echo = FALSE, results = "asis",fig.width = 20, fig.height =6,warning = FALSE, message = FALSE }
+
+aln <- alnmts[["class_iid_bacteriocinno_CEs"]]
+aln1 <- msaConvert(aln, "seqinr::alignment")
+writeXStringSet(as(aln, "AAStringSet"), file="aln.fasta")
+```
+```{r c2dsb_nce_2, echo = FALSE, results = "asis",fig.width = 8, fig.height =3 }
+
+# visualize the dendogram
+cat("<br>Tree using hamming string distances based on the protein sequences<br>")
+sdist <- stringDist(as(aln,"AAStringSet"), method="hamming")
+clust <- hclust(sdist, method = "single")
+# plot(clust)
+dendr <- dendro_data(clust, type="rectangle") 
+dendr$labels$y = dendr$labels$y-1
+
+ggplot() + 
+  geom_segment(data=segment(dendr), aes(x=x, y=y, xend=xend, yend=yend)) + 
+  geom_text(data=dendr$labels, aes(x=x, y=y, label=label, hjust=0), size=2.5) +
+  coord_flip() + scale_y_reverse(expand=c(0.4, 0)) + 
+  theme_dendro()
+```
+
+```{r c2dsb_nce_6, echo = FALSE, results = "asis", echo = FALSE, fig.width = 20, fig.height =6,warning = FALSE, message = FALSE}
+
+cat("<br>Tree using Fitch similarity for amino acid sequences")
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d)
+#https://4va.github.io/biodatasci/r-ggtree.html
+msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =.45, width = 4) + geom_tiplab( hjust = -0.1, size = 5)
+```
+
+## Lanthipeptide class i - All
+
+There are only two sequences for this class of RRiPS. 
+
+```{r lant_ci_1, echo = FALSE, results = "asis",fig.width = 20, fig.height =6,warning = FALSE, message = FALSE }
+
+aln <- alnmts[["lanthipeptide_class_i"]]
+aln1 <- msaConvert(aln, "seqinr::alignment")
+writeXStringSet(as(aln, "AAStringSet"), file="aln.fasta")
+```
+
+```{r lant_ci_6, echo = FALSE, results = "asis", echo = FALSE, fig.width = 20, fig.height =6,warning = FALSE, message = FALSE}
+#https://4va.github.io/biodatasci/r-ggtree.html
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d) 
+msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =.3, width = 4, height = .6) + geom_tiplab( hjust = -0.1, size = 5)
+```
+
+## Lanthipeptide class i - non Contig Edges
+
+There are only two sequences for this class of RRiPS. 
+
+```{r lant_ci_nc_1, echo = FALSE, results = "asis",fig.width = 20, fig.height =6,warning = FALSE, message = FALSE }
+
+aln <- alnmts[["lanthipeptide_class_ino_CEs"]]
+aln1 <- msaConvert(aln, "seqinr::alignment")
+writeXStringSet(as(aln, "AAStringSet"), file="aln.fasta")
+```
+
+```{r lant_ci_nc_6, echo = FALSE, results = "asis", echo = FALSE, fig.width = 20, fig.height =6,warning = FALSE, message = FALSE}
+#https://4va.github.io/biodatasci/r-ggtree.html
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d) 
+msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =.3, width = 4, height = .6) + geom_tiplab( hjust = -0.1, size = 5)
+```
+
+
+
+## Lanthipeptide class iv - All
+
+There are only two sequences for this class of RRiPS.
+
+```{r lant_civ_1, echo = FALSE, results = "asis",fig.width = 20, fig.height =6,warning = FALSE, message = FALSE }
+
+aln <- alnmts[["lanthipeptide_class_iv"]]
+aln1 <- msaConvert(aln, "seqinr::alignment")
+writeXStringSet(as(aln, "AAStringSet"), file="aln.fasta")
+```
+
+```{r lant_civ_6, echo = FALSE, results = "asis", echo = FALSE, fig.width = 20, fig.height =6,warning = FALSE, message = FALSE}
+#https://4va.github.io/biodatasci/r-ggtree.html
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d)
+msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =.15, width = 4) + geom_tiplab( hjust = -0.1, size = 5) 
+```
+
+## Lanthipeptide class v - All
+
+There are only two sequences for this class of RRiPS.
+
+```{r lant_cv_1, echo = FALSE, results = "asis",fig.width = 20, fig.height =6,warning = FALSE, message = FALSE }
+
+aln <- alnmts[["lanthipeptide_class_v"]]
+aln1 <- msaConvert(aln, "seqinr::alignment")
+writeXStringSet(as(aln, "AAStringSet"), file="aln.fasta")
+```
+
+```{r lant_cv_6, echo = FALSE, results = "asis", echo = FALSE, fig.width = 20, fig.height =6,warning = FALSE, message = FALSE}
+#https://4va.github.io/biodatasci/r-ggtree.html
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d)
+msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =.5, width = 4, height = .6) + geom_tiplab(hjust = -0.1, size = 5)
+```
+
+## Lanthipeptide class v - non Contig Edges
+
+All lanthipepetide class v clusters overlap contig edges
+
+## Lassopeptide - All
+There are only two sequences for this class of RRiPS.
+
+```{r lasso_1a, echo = FALSE, results = "asis",fig.width = 20, fig.height =6,warning = FALSE, message = FALSE }
+
+aln <- alnmts[["lassopeptide"]]
+aln1 <- msaConvert(aln, "seqinr::alignment")
+writeXStringSet(as(aln, "AAStringSet"), file="aln.fasta")
+```
+
+```{r lasso_6, echo = FALSE, results = "asis", echo = FALSE, fig.width = 20, fig.height =6,warning = FALSE, message = FALSE}
+#https://4va.github.io/biodatasci/r-ggtree.html
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d)
+msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =.4, width = 4, height = .6) + geom_tiplab( hjust = -0.1, size = 5)
+```
+## Lassopeptide - non Contig Edges
+
+All lassopepetide class v clusters overlap contig edges
+
+
+## Linaridin - All
+
+```{r linar_1a, echo = FALSE, results = "asis",fig.width = 20, fig.height =6,warning = FALSE, message = FALSE }
+
+aln <- alnmts[["linaridin"]]
+aln1 <- msaConvert(aln, "seqinr::alignment")
+writeXStringSet(as(aln, "AAStringSet"), file="aln.fasta")
+```
+
+```{r linar_2, echo = FALSE, results = "asis",fig.width = 8, fig.height =3 }
+
+# visulaize the dendogram
+cat("<br>Tree using hamming string distances based on the protein sequences<br>")
+sdist <- stringDist(as(aln,"AAStringSet"), method="hamming")
+clust <- hclust(sdist, method = "single")
+dendr <- dendro_data(clust, type="rectangle")
+dendr$labels$y = dendr$labels$y-3
+
+ggplot() + 
+  geom_segment(data=segment(dendr), aes(x=x, y=y, xend=xend, yend=yend)) + 
+  geom_text(data=dendr$labels, aes(x=x, y=y, label=label, hjust=0), size=2.5 ) +
+  coord_flip() + scale_y_reverse(expand=c(0.4, 0)) + 
+  theme_dendro()
+```
+
+```{r linar_6, echo = FALSE, results = "asis", echo = FALSE, fig.width = 20, fig.height =6,warning = FALSE, message = FALSE}
+cat("<br>Tree using Fitch similarity for amino acid sequences")
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d)
+#https://4va.github.io/biodatasci/r-ggtree.html
+msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =.4, width = 4, height = .6) + geom_tiplab( hjust = -0.1, size = 5)
+```
+
+
+## Linaridin - non Contig Edges
+
+```{r linar_nce_1a, echo = FALSE, results = "asis",fig.width = 20, fig.height =6,warning = FALSE, message = FALSE }
+
+aln <- alnmts[["linaridin"]]
+aln1 <- msaConvert(aln, "seqinr::alignment")
+writeXStringSet(as(aln, "AAStringSet"), file="aln.fasta")
+```
+
+```{r linar_nce_2, echo = FALSE, results = "asis",fig.width = 8, fig.height =3 }
+
+# visulaize the dendogram
+cat("<br>Tree using hamming string distances based on the protein sequences<br>")
+sdist <- stringDist(as(aln,"AAStringSet"), method="hamming")
+clust <- hclust(sdist, method = "single")
+dendr <- dendro_data(clust, type="rectangle") 
+dendr$labels$y = dendr$labels$y-3
+
+ggplot() + 
+  geom_segment(data=segment(dendr), aes(x=x, y=y, xend=xend, yend=yend)) + 
+  geom_text(data=dendr$labels, aes(x=x, y=y, label=label, hjust=0), size=2.5) +
+  coord_flip() + scale_y_reverse(expand=c(0.4, 0)) + 
+  theme_dendro()
+```
+
+```{r linar_nce_6, echo = FALSE, results = "asis", echo = FALSE, fig.width = 20, fig.height =6,warning = FALSE, message = FALSE}
+cat("<br>Tree using Fitch similarity for amino acid sequences")
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d)
+#https://4va.github.io/biodatasci/r-ggtree.html
+msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =.4, width = 4, height = .6) + geom_tiplab( hjust = -0.1, size = 5)
+```
+
+## Thiopeptide
+There are only two sequences for this class of RRiPS.
+
+```{r thio_1a, echo = FALSE, results = "asis",fig.width = 20, fig.height =6,warning = FALSE, message = FALSE }
+
+aln <- alnmts[["thiopeptide"]]
+aln1 <- msaConvert(aln, "seqinr::alignment")
+writeXStringSet(as(aln, "AAStringSet"), file="aln.fasta")
+```
+```{r thio_6, echo = FALSE, results = "asis", echo = FALSE, fig.width = 20, fig.height =6,warning = FALSE, message = FALSE}
+#https://4va.github.io/biodatasci/r-ggtree.html
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d)
+msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =.4, width = 4, height = .6) + geom_tiplab( hjust = -0.1, size = 5)
+```
+
+
+## Thiopeptide - non Contig Edges
+There are only two sequences for this class of RRiPS.
+
+```{r thio_nce_1a, echo = FALSE, results = "asis",fig.width = 20, fig.height =6,warning = FALSE, message = FALSE }
+
+aln <- alnmts[["thiopeptide"]]
+aln1 <- msaConvert(aln, "seqinr::alignment")
+writeXStringSet(as(aln, "AAStringSet"), file="aln.fasta")
+```
+```{r thio_nce_6, echo = FALSE, results = "asis", echo = FALSE, fig.width = 20, fig.height =6,warning = FALSE, message = FALSE}
+#https://4va.github.io/biodatasci/r-ggtree.html
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d)
+msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =.4, width = 4, height = .6) + geom_tiplab( hjust = -0.1, size = 5)
+```
+
+
+# Session info
+```{r sessionInfo}
+sessionInfo()
+
+```

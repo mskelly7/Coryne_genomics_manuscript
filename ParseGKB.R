@@ -98,7 +98,7 @@ ParseSampleXRegion = function(fh) {
 #names(test) <-gsub(".gkb", "", basename(files))
 
 # directory to the directory containing the antismash output folders / files. Assumes one smaple per antismash folder. 
-antismashDir = "~/Documents/2022_Coryne_MKelly/Data/WGS/processed/antismashOutputs"
+antismashDir = "Data/WGS/processed/antismashOutputs"
 
 # get full paths for all antismash region.gbk files
 files <- list.files(antismashDir , 

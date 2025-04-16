@@ -2,7 +2,7 @@
 library(dplyr)
 library(ggplot2)
 
-dat <- read.csv("/Users/iz12/Library/CloudStorage/Box-Box/Coryne Genomics/Results/protocores_respiratory.csv")
+dat <- read.csv("Results/protocores_respiratory.csv")
 dat <- dat[which(!duplicated(dat$strain_id)),]
 
 species <- c("propinquum", "pseudodiphtheriticum", "accolens")

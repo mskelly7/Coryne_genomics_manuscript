@@ -1,0 +1,379 @@
+---
+title: Coryne BGC Alignments 
+author: Rachel Myers, Ilya Zhbannikov 
+date: "`r Sys.Date()`"
+output: 
+    html_document:
+        toc: true
+        self.contained: true
+---
+
+# Coryne genomes analysis
+# Preliminaries
+
+## Credits
+Author: Rachel Myers
+
+Investigator: Dr. Matthew Kelly
+
+Date: `r Sys.Date()`
+
+## Recreating this report
+
+1. Ensure that the R packages rmarkdown, knitr, and those listed below are installed
+
+2. Ensure that the file Coryne_BGC_Alignments.rmd is in your working directory in R, change your R's working directory if needed 
+
+3. Copy and paste the below code chunk into R, updating the path for the BGC fastq files
+
+```{r recreate, echo = TRUE, eval = FALSE,  results = "asis"}
+
+rm(list= ls(all= TRUE))
+require("rmarkdown")
+require("knitr")
+setwd("antismash")
+fastadir <- "MultipleAlignments/"
+render("Coryne_BGC_Alignments_Siderophores.rmd", c("html_document"))
+
+```
+
+Random seed is sepcified for reporducibility of mulitple alignments 
+
+
+```{r loadpackages, echo = F, warnings = F, error = F, message = F}
+library(muscle)
+library(msa)
+require(seqinr)
+require(ggtree)
+require(ggdendro)
+require(ggplot2)
+library(ggmsa)
+library(grid)
+library(cluster)
+library(gridExtra)
+library(cluster)
+library(fpc)
+library(TreeDist)
+library(castor)
+library(ape)
+
+source("multiplot.R")
+
+set.seed(1234)
+
+make_plot <- function(tr, fasta, aln, facet_widths=c(1,3), xlim_tree=1, start = NULL, end = NULL) {
+    # https://github.com/GuangchuangYu/ggtree-current-protocols
+  
+    #tr = tr2
+    #fasta = "/Volumes/BioCAT/BioCAT_Projects/2022_KellyM_Coryne/Code/antismash/aln_ciderophore_noCE.fasta"
+    #aln = aln1
+    #facet_widths=c(1,10)
+    #xlim_tree=1
+    #start=1
+    #end=100
+    
+    #tr$tip.label <- gsub(pattern = "\\'", replacement = "", tr$tip.label)
+    #tr$tip.label <- gsub(pattern = "\\ ", replacement = "", tr$tip.label)
+    #aln$nam <- gsub(pattern = "\\[|\\]|_", replacement = "", aln$nam)
+    #aln$nam <- gsub(pattern = "\\ ", replacement = "", aln$nam)
+    
+    p <- ggtree(tr) + geom_tiplab(hjust = -100, size = 3)
+    
+    
+    df <- as.data.frame(do.call(rbind, strsplit(x = aln$nam, split=" ")))
+    labs <- sapply(1:nrow(df), function(i) {paste( "paste(italic('", paste(df[i,1], df[i,2]), "'), ", " ", df[i,3], ")")} )
+    labs <- c(gsub("spp.", "sp.", labs), rep(NA, nrow(p$data)-nrow(df)))
+    labs <- gsub("lactococcin", "Lactococcin", labs)
+    
+    
+    p <- p + geom_text(label = labs, parse=T, hjust=-0.1, size=3) 
+    #p <- p +  geom_segment(aes(x = 100, y = 7.5, xend = 300, yend = 7.5), size=1, linetype="dashed", color = "red", inherit.aes = T) #+
+    #  geom_segment(aes(x = 2, y = 12.5, xend = 300, yend = 12.5), size=1, linetype="dashed", color = "red") +
+    #p <- p +  geom_text(x=50, y=15, label="Group 1", size=7) +
+    #  geom_text(x=50, y=10, label="Group 2") + 
+    #  geom_text(x=50, y=4, label="Group 3") 
+    
+    if(is.null(start)) {
+        tmsa <- tidy_msa(fasta, end = end)
+    } else if(is.null(end)) {
+        tmsa <- tidy_msa(fasta, start = start)
+    } else if(is.null(start) & is.null(end)) {
+        tmsa <- tidy_msa(fasta)
+    } else {
+        tmsa <- tidy_msa(fasta, start = start, end = end)
+    }
+    
+    #tmsa$name <- gsub(pattern = "\\[|\\]|_", replacement = " ", tmsa$name)
+    #tmsa$name <- gsub(pattern = "\\ ", replacement = "", tmsa$name)
+    
+    
+    pp <- p + 
+      geom_facet(geom = geom_msa, data = tmsa, #geom_facet(geom = geom_msa, data = tmsa,  space = "fixed", scales = "fixed",
+            panel = 'Multiple Sequence Alignment',
+            color = "Chemistry_AA", show.legend=T) + 
+      #geom_facet(geom = ggmsa:::geom_logo, data = tmsa, panel = "Multiple Sequence Alignment", color = "Chemistry_AA", adaptive=T) +
+      theme(strip.text.x = element_blank(), legend.title = element_blank(), legend.key = element_rect(fill = NA)) + scale_x_continuous(expand = c(0,0)) + xlab(paste0(start, ":", end))
+      
+      #geom_line(data=as.data.frame(matrix(7.5, 1:100)), size=1, linetype="dashed", color = "red", inherit.aes = T)
+    
+    pp <- pp + xlim_tree(xlim_tree)
+  
+    pp <- facet_widths(pp, widths=facet_widths)
+    
+    return(pp)
+}
+
+```
+
+## Fastq file processing
+
+* List all fasta files found in the fasta firectory noted above 
+
+* For each file, generate a MUSCLE alignment 
+
+```{r listfasta, echo = FALSE, results = "asis", message = FALSE, warning = FALSE}
+# listfasta
+
+fastafh = list.files(fastadir, pattern = "fasta", full.names = TRUE )
+# reduce to the bacteriocin and RiPPS
+
+fastafh = fastafh[grepl("siderophore", fastafh)]
+#fastafh = fastafh[grepl("bacteriocin", fastafh)]
+
+# Add S.aureus
+fastafh <- c(fastafh, "manuscript/alignment/Ciderophore_noCE/SbnC_aa_sequence.fasta")
+
+fastadata = lapply(fastafh, readAAStringSet )
+names(fastadata) = gsub("respir_", "", gsub(".fasta", "", basename(fastafh)))
+
+fastadata[["siderophore_CEs"]]<-append(fastadata[["siderophore_CEs"]], fastadata[["SbnC_aa_sequence"]])
+fastadata[["siderophoreno_CEs"]]<-append(fastadata[["siderophoreno_CEs"]], fastadata[["SbnC_aa_sequence"]])
+
+# Exclude genomes from blacklist:
+to_remove <- read.csv("Results/protocores_respiratory_to_remove.csv")
+tmp <- do.call(rbind, strsplit(unique(to_remove$deposit_id), "_"))
+to_remove_seqid <- c(tmp[1:29, 3], tmp[30:nrow(tmp), 2])
+fastadata1 <- fastadata
+
+for(n in names(fastadata1)) {
+    ids_to_remove <- grep(pattern = paste(to_remove_seqid, collapse="|"), x = names(fastadata1[[n]]), ignore.case = T)
+    if(length(ids_to_remove) != 0) {
+        fastadata1[[n]] <- fastadata1[[n]][-ids_to_remove]
+    }
+}
+
+#length(fastadata1$siderophore)
+#length(fastadata$siderophore)
+#length(fastadata1$siderophoreno_CEs)
+#length(fastadata$siderophoreno_CEs)
+
+                                                   
+alnmts = lapply(fastadata1, function(x) muscle::muscle(x, quiet = TRUE) )
+names(alnmts) = gsub("respir_", "", gsub(".fasta", "", basename(fastafh)))
+
+```
+
+# Siderophore proto_gene sequence alignments
+
+## siderophore - All 
+
+```{r poc_1a, echo = FALSE, results = "asis",fig.width = 20, fig.height =6,warning = FALSE, message = FALSE }
+
+aln <- alnmts[["siderophore"]]
+aln1 <- msaConvert(aln, "seqinr::alignment")
+writeXStringSet(as(aln, "AAStringSet"), file="aln.fasta")
+```
+```{r poc_2, echo = FALSE, results = "asis",fig.width = 6, fig.height =8 }
+
+# visulaize the dendogram
+cat("<br>Tree using hamming string distances based on the protein sequences<br>")
+sdist <- stringDist(as(aln,"AAStringSet"), method="hamming")
+clust <- hclust(sdist, method = "single")
+plot(clust)
+```
+
+```{r poc_6, echo = FALSE, results = "asis", echo = FALSE, fig.width = 30, fig.height =15,warning = FALSE, message = FALSE, eval=F}
+
+cat("<br>Tree using Fitch similarity for amino acid sequences")
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d)
+##https://4va.github.io/biodatasci/r-ggtree.html
+#msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =.5, width = 4) + geom_tiplab( hjust = -0.1)
+alen <- 200
+for(i in seq(1, nchar(aln1$seq[4]),by=alen)) {
+   print( make_plot(tr, "aln.fasta", aln1, facet_widths=c(2,7), start = i, 
+                    end = ifelse(i+alen > nchar(aln1$seq[1]), nchar(aln1$seq[4]), i + alen) ))
+}
+
+```
+
+
+```{r poc_66, echo = FALSE, results = "asis", echo = FALSE, fig.width = 60, fig.height =20,warning = FALSE, message = FALSE, eval=F}
+
+cat("<br>Tree using Fitch similarity for amino acid sequences")
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d)
+##https://4va.github.io/biodatasci/r-ggtree.html
+#msaplot(p=ggtree(tr), fasta = "aln.fasta", offset =.5, width = 4) + geom_tiplab( hjust = -0.1)
+make_plot(tr, "aln.fasta", aln1, facet_widths=c(2,7), start = 201, end = NULL)
+```
+
+## siderophore - non Contig Edges 
+
+```{r c2dsb_nce_1a, echo = FALSE, results = "asis",fig.width = 20, fig.height =6,warning = FALSE, message = FALSE }
+aln <- alnmts[["siderophoreno_CEs"]]
+#aln <- alnmts[["class_iid_bacteriocinno_CEs"]]
+aln1 <- msaConvert(aln, "seqinr::alignment")
+writeXStringSet(as(aln, "AAStringSet"), file="aln.fasta")
+writeXStringSet(as(aln, "AAStringSet"), file="aln_ciderophore_noCE.fasta")
+```
+```{r c2dsb_nce_2, echo = FALSE, results = "asis",fig.width = 6, fig.height =8 }
+
+# visualize the dendogram
+cat("<br>Tree using hamming string distances based on the protein sequences<br>")
+sdist <- stringDist(as(aln,"AAStringSet"), method="hamming")
+clust <- hclust(sdist, method = "single")
+plot(clust)
+```
+
+```{r c2dsb_nce_6, echo = FALSE, results = "asis", echo = FALSE, fig.width = 20, fig.height =7,warning = FALSE, message = FALSE, eval=T}
+
+cat("<br>Tree using Fitch similarity for amino acid sequences (1st 200 bases)")
+d <- dist.alignment(aln1, "similarity")
+tr <- hclust(d)
+##https://4va.github.io/biodatasci/r-ggtree.html
+#pp <- make_plot(tr, "aln.fasta", aln1, facet_widths=c(2,4), xlim_tree = 1, start = 1, end = 200)
+#pp
+```
+
+
+```{r c2dsb_nce_6_2_2, echo = FALSE, fig.width=20, fig.height=7,warning = FALSE, message = FALSE}
+
+tr2 <- ape::read.tree("Code/antismash/MEGA/Ciderophore_noCE/aln_ciderophore_noCE.nwk")
+tr2$tip.label <- gsub("'", "", tr2$tip.label)
+
+make_plot2 <- function(tr, aln="aln.fasta", start=1, end=200, facet_widths=c(2,4)) {
+    AAStringSet <- readAAStringSet(aln)
+    ordered <- gsub("'", "", tr$tip.label)
+    names(AAStringSet) <- gsub(pattern = "\\[|\\]|_", replacement = " ", names(AAStringSet))
+
+    tr_ord <- ape::rotateConstr(tr, rev(ordered))
+    
+    p <- ggtree(tr_ord, ladderize = FALSE) + geom_tiplab(size=3)
+
+    pp <- p + 
+          geom_facet(geom = geom_msa, data = tidy_msa(AAStringSet[ordered], start = start, end = end), 
+                panel = 'Multiple Sequence Alignment',
+                color = "Chemistry_AA", show.legend=T) + 
+          theme(strip.text.x = element_blank(), legend.title = element_blank(), legend.key = element_rect(fill = NA)) + scale_x_continuous(expand = c(0,0)) + xlab(paste0(start, ":", end))
+    
+    xlim_tree=c(0, 2) 
+    facet_widths=facet_widths
+    
+    pp1 <- pp + xlim_tree(xlim_tree)
+    pp1 <- facet_widths(pp1, widths=facet_widths)
+    return(pp1)
+}
+
+
+make_plot2(tr2, aln="aln.fasta", start=1, end=200, facet_widths=c(2,4))
+    
+```
+
+
+```{r c2dsb_nce_66, echo = FALSE, results = "asis", echo = FALSE, fig.width = 20, fig.height = 30, warning = FALSE, message = FALSE}
+
+cat("<br>All bases.")
+alen <- 200
+plots <- list()
+for(i in seq(1, nchar(aln1$seq[1]),by=alen)) {
+   p <- make_plot2(tr2, aln="aln.fasta", start=i, end=ifelse(i+alen > nchar(aln1$seq[1]), nchar(aln1$seq[1]), i+alen  ) )
+   
+   plots[[ (i + alen) %/% alen ]] <- p
+}
+
+multiplot(plotlist = plots, cols = 1)
+```
+
+
+
+```{r, eval=T, echo=F, message=F, warning=F, fig.width=15, fig.height=10, results='asis'}
+
+par(mar=c(3,1,1,5)) 
+plot(tr)
+rect.hclust(tr, k=4, border="red")
+#identify(tr)
+#line.hclust(tr, k=3, border="red")
+
+x <- cutree(tr, k = 4)
+
+#tr$order
+tr2 <- makeNodeLabel(as.phylo(tr))
+a1 <- get_all_pairwise_distances(tr2)
+colnames(a1) <- rownames(a1) <- c(tr2$tip.label, tr2$node.label)
+#a1[ which(rownames(a1) == "Node3"), which(colnames(a1) == "Node5" )]
+
+
+ddf <- data.frame(matrix(NA, nrow=0, ncol=4))
+groups <- list()
+for(cc in 1:length(unique(x))) {
+  sp <- names(which(x==cc))
+  #groups[[paste("Group", cc)]] <- sp
+  groups[[cc]] <- sp
+  #print(cc)
+  aaa <- data.matrix(d)
+  # Between the group
+  ave_dist <- mean(a1[which( (rownames(a1) %in% sp)),  which(colnames(a1) %in% sp) ])
+  print(ave_dist)
+  
+  rw <- c(cc, paste(unique(names(which(x==cc))), collapse="\n"), signif(ave_dist, 3), NA)
+  ddf <- rbind(ddf, rw)
+  
+}
+
+#groups <- groups[length(groups):1]
+names(groups) <- paste("Group", 1:length(groups))
+
+colnames(ddf) <- c("group", "species", "simw", "simb")
+
+plot(tr2, show.node.label = TRUE)
+
+ddf_bw <- data.frame(matrix(NA, nrow=length(groups), ncol=length(groups)))
+for(i in 1:length(groups)) {
+  for(j in 1:length(groups)) {
+    ave_dist <- mean(a1[which( (rownames(a1) %in% groups[[i]])),  which(colnames(a1) %in% groups[[j]]) ])
+    ddf_bw[i,j] <- ave_dist
+  }
+}
+
+rownames(ddf_bw) <- colnames(ddf_bw) <- names(groups)
+
+cat("<br>Distance within (diagonal) and between the groups</br>\n")
+knitr::kable(ddf_bw)
+
+
+```
+
+```{r, fig.width=15, fig.height=10, message=F, warning=F, echo=F, eval=F}
+p <- ggtree(tr2) + geom_tiplab(hjust = -100, size = 3)
+    
+df <- as.data.frame(do.call(rbind, strsplit(x = aln1$nam, split=" ")))
+labs <- sapply(1:nrow(df), function(i) {paste( "paste(italic('", paste(df[i,1], df[i,2]), "'), ", " ", df[i,3], ")")} )
+labs <- c(gsub("spp.", "sp.", labs), rep(NA, nrow(p$data)-nrow(df)))
+labs <- gsub("lactococcin", "Lactococcin", labs)
+
+p <- p + geom_text(label = labs, parse=T, hjust=-0.1, size=3) + xlim_tree(1)
+
+ss <- tableGrob(ddf)
+grid.arrange(p,ss, ncol = 2)
+
+
+```
+
+
+
+# Session info
+```{r sessionInfo}
+sessionInfo()
+
+```

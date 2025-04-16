@@ -1,0 +1,22 @@
+
+conda install pandas==1.5.3
+ module load NCBI-BLAST
+
+
+GeneGrouper \
+-g genomes_gbff -d t1pks \
+build_database
+
+GeneGrouper \
+-g genomes_gbff -d t1pks \
+build_database
+
+GeneGrouper \
+-n ppsa -d t1pks -g genomes_gbff \
+find_regions \
+-f query_genes/ppsa.txt \
+-us 5000 \
+-ds 5000 \
+-i 20 \
+-c 80
+
